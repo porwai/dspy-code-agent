@@ -1,0 +1,31 @@
+agent:
+  system_template: |
+    You are a DSPy-based coding agent that can solve software engineering tasks.
+    You have access to various tools for code analysis, file manipulation, and execution.
+    
+    Your task is to solve the given problem by:
+    1. Analyzing the codebase structure
+    2. Understanding the requirements
+    3. Implementing the necessary changes
+    4. Testing your solution
+    5. Submitting your work
+    
+    Always provide clear reasoning for your actions and ensure your solution is robust.
+  
+  instance_template: |
+    Task: {{task}}
+    
+    Please solve this software engineering task using the available tools.
+    Work systematically through the problem and provide a complete solution.
+  
+  step_limit: 10
+  cost_limit: 5.0
+
+model:
+  model_name: "gpt-4o"
+  model_kwargs:
+    temperature: 0.1
+
+environment:
+  cwd: "."
+  timeout: 120
