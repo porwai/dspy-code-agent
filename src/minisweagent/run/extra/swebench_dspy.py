@@ -4,6 +4,7 @@
 
 import os
 import traceback
+from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -27,7 +28,11 @@ from minisweagent.utils.log import logger
 app = typer.Typer(rich_markup_mode="rich", add_completion=False)
 
 DEFAULT_CONFIG = builtin_config_dir / "extra" / "swebench.yaml"
-DEFAULT_OUTPUT = global_config_dir / "last_swebench_dspy_run.traj.json"
+# Default to project-local outputs directory with timestamp
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
+OUTPUT_BASE = Path(os.getenv("MSWEA_OUTPUT_DIR", PROJECT_ROOT / "outputs"))
+TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+DEFAULT_OUTPUT = OUTPUT_BASE / "swebench_dspy" / f"run_{TIMESTAMP}" / "traj.json"
 
 _HELP_TEXT = """Run DSPy agent on SWE-bench instances.
 
@@ -112,6 +117,16 @@ def main(
             save_traj_dspy(agent, output.with_suffix(".dspy.traj.json"), exit_status=exit_status, result=result, extra_info=extra_info)
             logger.info(f"Trajectories saved to: {output} and {output.with_suffix('.dspy.traj.json')}")
         
+        # If possible, capture a unified diff from the repo as the submission
+        try:
+            # Ensure we diff within the repo working dir
+            diff_out = env.execute("git -C /testbed diff")
+            diff_text = (diff_out.get("output") or "").strip()
+            if diff_out.get("returncode") == 0 and diff_text:
+                result = diff_text
+        except Exception:
+            pass
+
         # Update preds.json for SWE-bench evaluation
         output_dir = output.parent if output else Path(".")
         update_preds_json(output_dir, instance_spec, model.config.model_name, result)

@@ -42,7 +42,14 @@ def create_environment_tools(env: Any) -> list[dspy.Tool]:
     def list_files(path: str = ".") -> str:
         """List files in a directory."""
         try:
-            result = env.execute(f"find {path} -type f -not -path '*/.*' | head -50")
+            # Ignore noisy virtualenv and site-packages to keep results relevant
+            result = env.execute(
+                f"find {path} -type f \
+                   -not -path '*/.*' \
+                   -not -path '*/.venv/*' \
+                   -not -path '*/venv/*' \
+                   -not -path '*/site-packages/*' | head -50"
+            )
             if result.get("returncode") == 0:
                 return result.get("output", "No files found")
             else:
@@ -53,7 +60,16 @@ def create_environment_tools(env: Any) -> list[dspy.Tool]:
     def search_code(query: str, path: str = ".") -> str:
         """Search for text in files."""
         try:
-            result = env.execute(f"grep -r '{query}' {path} --include='*.py' --include='*.js' --include='*.ts' --include='*.java' --include='*.cpp' --include='*.c' --include='*.h' | head -20")
+            # Exclude vendor and venv directories to avoid noise and timeouts
+            result = env.execute(
+                "bash -lc "
+                + repr(
+                    "grep -r --binary-files=without-match "
+                    "--exclude-dir='.git' --exclude-dir='.venv' --exclude-dir='venv' --exclude-dir='site-packages' "
+                    "--include='*.py' --include='*.js' --include='*.ts' --include='*.java' --include='*.cpp' --include='*.c' --include='*.h' "
+                    f"'{query}' {path} | head -20"
+                )
+            )
             if result.get("returncode") == 0:
                 output = result.get("output", "")
                 return output if output else f"No matches found for '{query}'"

@@ -4,6 +4,7 @@
 
 import os
 import traceback
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,11 @@ from minisweagent.run.utils.save_dspy import save_traj_dspy
 from minisweagent.utils.log import logger
 
 DEFAULT_CONFIG = Path(os.getenv("MSWEA_DSPY_MINI_CONFIG_PATH", builtin_config_dir / "dspy.yaml"))
-DEFAULT_OUTPUT = global_config_dir / "last_dspy_mini_run.traj.json"
+# Default to project-local outputs directory with timestamp
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+OUTPUT_BASE = Path(os.getenv("MSWEA_OUTPUT_DIR", PROJECT_ROOT / "outputs"))
+TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+DEFAULT_OUTPUT = OUTPUT_BASE / "dspy" / f"run_{TIMESTAMP}" / "traj.json"
 console = Console(highlight=False)
 app = typer.Typer(rich_markup_mode="rich")
 prompt_session = PromptSession(history=FileHistory(global_config_dir / "dspy_mini_task_history.txt"))
