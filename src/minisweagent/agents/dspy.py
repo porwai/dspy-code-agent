@@ -21,6 +21,7 @@ from minisweagent.agents.default import (
     Submitted,
     LimitsExceeded,
 )
+from minisweagent.dspy_modules import DSPySoftwareEngineeringAgent
 
 
 @dataclass
@@ -29,26 +30,6 @@ class DSPyAgentConfig:
     system_template: str = "You are a DSPy coding agent for SWE-bench tasks."
     step_limit: int = 6
     cost_limit: float = 3.0
-
-'''
-@dataclass
-class AgentConfig:
-    # The default settings are the bare minimum to run the agent. Take a look at the config files for improved settings.
-    system_template: str = "You are a helpful assistant that can do anything."
-    instance_template: str = (
-        "Your task: {{task}}. Please reply with a single shell command in triple backticks. "
-        "To finish, the first line of the output of the shell command must be 'COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT'."
-    )
-    timeout_template: str = (
-        "The last command <command>{{action['action']}}</command> timed out and has been killed.\n"
-        "The output of the command was:\n <output>\n{{output}}\n</output>\n"
-        "Please try another command and make sure to avoid those requiring interactive input."
-    )
-    format_error_template: str = "Please always provide EXACTLY ONE action in triple backticks."
-    action_observation_template: str = "Observation: {{output}}"
-    step_limit: int = 0
-    cost_limit: float = 3.0
-'''
 
 lm = dspy.LM('openai/gpt-4o-mini', api_key=os.environ["OPENAI_API_KEY"])# Configure DSPy to use OpenAI
 dspy.configure(lm=lm)
@@ -70,7 +51,7 @@ class DSPyAgent:
         # Initialize DSPy ReAct agent with basic tools
         # Note: You'll need to implement or import your actual tools
         self.dspy_agent = dspy.ReAct(
-            signature="instruction -> answer",
+            DSPySoftwareEngineeringAgent,
             tools=self._get_tools(),
             max_iters=self.config.step_limit,
         )
@@ -113,12 +94,11 @@ class DSPyAgent:
 
     def _get_tools(self):
         """Get tools for DSPy agent with trajectory logging wrappers."""
-        # Check if we're in a SWE-bench environment (Docker/containerized)
-        if hasattr(self.env, 'execute') and hasattr(self.env, 'image'):
-            # Use environment-aware tools for SWE-bench
+        # Prefer environment-aware tools whenever the environment can execute commands
+        if hasattr(self.env, 'execute'):
             base_tools = create_environment_tools(self.env)
         else:
-            # Use local filesystem tools for local development
+            # Fallback to local filesystem tools for non-environment runs
             base_tools = [
                 # search tools
                 search_tools.search_code_tool,
@@ -147,7 +127,7 @@ class DSPyAgent:
         
         try:
             # Use DSPy agent to solve the task
-            result = self.dspy_agent(instruction=task)
+            result = self.dspy_agent(task_description=task)
             # Capture DSPy trajectory if present
             trajectory = getattr(result, "trajectory", None)
             if trajectory is not None:
@@ -155,15 +135,25 @@ class DSPyAgent:
             # Capture full DSPy result (JSON-safe) using simple serializer
             self.dspy_result = self._serialize_response(result)
             
-            # Format result for framework compatibility
-            answer_text = (
-                getattr(result, "answer", None)
+            # Extract the solution from DSPySoftwareEngineeringAgent signature
+            solution_text = (
+                getattr(result, "solution", None)
+                or getattr(result, "answer", None)
                 or getattr(result, "completion", None)
+                or (result.get("solution") if isinstance(result, dict) else None)
                 or (result.get("answer") if isinstance(result, dict) else None)
                 or (result.get("completion") if isinstance(result, dict) else None)
                 or str(result)
             )
-            final_output = f"COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n{answer_text}"
+            
+            # Check if the solution contains a git diff (from submit_work tool)
+            if "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in solution_text:
+                # The solution already contains the proper submission format
+                final_output = solution_text
+            else:
+                # Fallback: wrap the solution in the expected format
+                final_output = f"COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n{solution_text}"
+            
             raise Submitted(final_output)
             
         except TerminatingException as e:

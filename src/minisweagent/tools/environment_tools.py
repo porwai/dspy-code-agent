@@ -93,6 +93,28 @@ def create_environment_tools(env: Any) -> list[dspy.Tool]:
         except Exception as e:
             return f"Error running tests: {e}"
 
+    def submit_work() -> str:
+        """Submit work by staging all changes and returning git diff. Use this when confident the task is complete."""
+        try:
+            # Stage all changes
+            add_result = env.execute("git add -A")
+            if add_result.get("returncode") != 0:
+                return f"Error staging changes: {add_result.get('output', 'Unknown error')}"
+            
+            # Get the staged diff
+            diff_result = env.execute("git diff --cached")
+            if diff_result.get("returncode") != 0:
+                return f"Error getting diff: {diff_result.get('output', 'Unknown error')}"
+            
+            diff_output = diff_result.get("output", "").strip()
+            if not diff_output:
+                return "No changes to submit. Make sure you have made modifications to the codebase."
+            
+            # Return the submission format similar to default agent
+            return f"COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n{diff_output}"
+        except Exception as e:
+            return f"Error submitting work: {e}"
+
     # Create DSPy tools
     return [
         dspy.Tool(
@@ -139,6 +161,14 @@ def create_environment_tools(env: Any) -> list[dspy.Tool]:
             func=run_tests,
             name="run_tests",
             desc="Run tests in the environment",
+            args={},
+            arg_types={},
+            arg_desc={},
+        ),
+        dspy.Tool(
+            func=submit_work,
+            name="submit_work",
+            desc="Submit work by staging all changes and returning git diff. Use this when confident the task is complete.",
             args={},
             arg_types={},
             arg_desc={},
