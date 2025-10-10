@@ -20,8 +20,8 @@ class DSPySoftwareEngineeringAgent(dspy.Signature):
     - Submitting your final work
     
     Work systematically through the problem:
-    1. Analyze the codebase by finding and reading relevant files
-    2. Create a script to reproduce the issue
+    1. Firstly, analyze the codebase by finding and reading relevant files
+    2. Then you must create a script to reproduce the issue
     3. Edit the source code to resolve the issue
     4. Verify your fix works by running your script again
     5. Test edge cases to ensure your fix is robust

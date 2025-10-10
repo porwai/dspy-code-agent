@@ -31,7 +31,8 @@ class DSPyAgentConfig:
     step_limit: int = 6
     cost_limit: float = 3.0
 
-lm = dspy.LM('openai/gpt-4o-mini', api_key=os.environ["OPENAI_API_KEY"])# Configure DSPy to use OpenAI
+# lm = dspy.LM('openai/gpt-4o-mini', api_key=os.environ["OPENAI_API_KEY"])# Configure DSPy to use OpenAI
+lm = dspy.LM('openrouter/qwen/qwen-2.5-coder-32b-instruct', api_key=os.environ["OPENROUTER_API_KEY"])# Configure DSPy to use OpenRouter Qwen
 dspy.configure(lm=lm)
 
 class DSPyAgent:

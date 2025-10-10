@@ -117,6 +117,68 @@ def create_environment_tools(env: Any) -> list[dspy.Tool]:
         return f"ERROR: Search failed: {res.get('output', '')}"
 
     # -------------------------
+    # Advanced Line Editing Tools
+    # -------------------------
+    def read_file_lines(path: str) -> list[str]:
+        """Return file as a list of lines (helper for line editing)."""
+        res = _exec(f"cat {shlex.quote(path)}")
+        if res.get("returncode") != 0:
+            raise RuntimeError(f"Could not read file '{path}': {res.get('output', 'Unknown error')}")
+        return res.get("output", "").splitlines(keepends=True)
+
+    def write_file_lines(path: str, lines: list[str]) -> None:
+        """Write list of lines back to file safely."""
+        content = "".join(lines)
+        ok, msg = _atomic_write(path, content)
+        if not ok:
+            raise RuntimeError(msg)
+
+    def replace_line_range(path: str, start_line: int, end_line: int, new_content: str) -> str:
+        """Replace a range of lines (1-indexed inclusive) in a file."""
+        try:
+            lines = read_file_lines(path)
+            if start_line < 1 or end_line > len(lines) or start_line > end_line:
+                return f"ERROR: Invalid line range {start_line}-{end_line} for file of length {len(lines)}"
+
+            new_lines = new_content.splitlines(keepends=True)
+            lines[start_line - 1:end_line] = new_lines
+            write_file_lines(path, lines)
+
+            snippet = "".join(lines[max(0, start_line - 3):min(len(lines), end_line + 2)])
+            return f"SUCCESS: Replaced lines {start_line}-{end_line} in {path}\nDIFF PREVIEW:\n{snippet}"
+        except Exception as e:
+            return f"ERROR: Could not replace lines in '{path}': {e}"
+
+    def insert_after_line(path: str, line_no: int, content: str) -> str:
+        """Insert text *after* the specified line number."""
+        try:
+            lines = read_file_lines(path)
+            if line_no < 0 or line_no > len(lines):
+                return f"ERROR: Invalid line number {line_no}"
+
+            new_lines = content.splitlines(keepends=True)
+            lines[line_no:line_no] = new_lines
+            write_file_lines(path, lines)
+
+            snippet = "".join(lines[max(0, line_no - 2):min(len(lines), line_no + len(new_lines) + 2)])
+            return f"SUCCESS: Inserted after line {line_no} in {path}\nPREVIEW:\n{snippet}"
+        except Exception as e:
+            return f"ERROR: Could not insert after line {line_no} in '{path}': {e}"
+
+    def delete_lines(path: str, start_line: int, end_line: int) -> str:
+        """Delete lines from a file."""
+        try:
+            lines = read_file_lines(path)
+            if start_line < 1 or end_line > len(lines) or start_line > end_line:
+                return f"ERROR: Invalid line range {start_line}-{end_line}"
+            del lines[start_line - 1:end_line]
+            write_file_lines(path, lines)
+            snippet = "".join(lines[max(0, start_line - 3):min(len(lines), start_line + 2)])
+            return f"SUCCESS: Deleted lines {start_line}-{end_line} in {path}\nPREVIEW:\n{snippet}"
+        except Exception as e:
+            return f"ERROR: Could not delete lines in '{path}': {e}"
+
+    # -------------------------
     # Simple File Editing
     # -------------------------
     def edit_file(path: str, old_text: str, new_text: str) -> str:
@@ -243,5 +305,29 @@ def create_environment_tools(env: Any) -> list[dspy.Tool]:
             args={},
             arg_types={},
             arg_desc={},
+        ),
+                dspy.Tool(
+            func=replace_line_range,
+            name="replace_line_range",
+            desc="Replace a range of lines (1-indexed inclusive) in a file with new content.",
+            args={"path": {"type": "string"}, "start_line": {"type": "integer"}, "end_line": {"type": "integer"}, "new_content": {"type": "string"}},
+            arg_types={"path": str, "start_line": int, "end_line": int, "new_content": str},
+            arg_desc={"path": "Path to the file", "start_line": "Starting line number (1-indexed)", "end_line": "Ending line number (inclusive)", "new_content": "Text to replace lines with"},
+        ),
+        dspy.Tool(
+            func=insert_after_line,
+            name="insert_after_line",
+            desc="Insert text after a specific line number.",
+            args={"path": {"type": "string"}, "line_no": {"type": "integer"}, "content": {"type": "string"}},
+            arg_types={"path": str, "line_no": int, "content": str},
+            arg_desc={"path": "Path to the file", "line_no": "Line number after which to insert", "content": "Text to insert"},
+        ),
+        dspy.Tool(
+            func=delete_lines,
+            name="delete_lines",
+            desc="Delete a range of lines from a file.",
+            args={"path": {"type": "string"}, "start_line": {"type": "integer"}, "end_line": {"type": "integer"}},
+            arg_types={"path": str, "start_line": int, "end_line": int},
+            arg_desc={"path": "Path to the file", "start_line": "Start line number (1-indexed)", "end_line": "End line number (inclusive)"},
         ),
     ]
