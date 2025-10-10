@@ -22,6 +22,7 @@ from minisweagent.agents.default import (
     LimitsExceeded,
 )
 from minisweagent.dspy_modules import DSPySoftwareEngineeringAgent
+from minisweagent.utils.log import logger
 
 
 @dataclass
@@ -31,8 +32,7 @@ class DSPyAgentConfig:
     step_limit: int = 6
     cost_limit: float = 3.0
 
-lm = dspy.LM('openai/gpt-4o-mini', api_key=os.environ["OPENAI_API_KEY"])# Configure DSPy to use OpenAI
-dspy.configure(lm=lm)
+# DSPy LM configuration will be set dynamically based on the model passed to the agent
 
 class DSPyAgent:
     """DSPy-based agent that integrates with mini-SWE-agent framework."""
@@ -48,6 +48,9 @@ class DSPyAgent:
         self.dspy_trajectory: list = []
         self.dspy_result: dict = {}
 
+        # Configure DSPy LM based on the model
+        self._configure_dspy_lm()
+
         # Initialize DSPy ReAct agent with basic tools
         # Note: You'll need to implement or import your actual tools
         self.dspy_agent = dspy.ReAct(
@@ -55,6 +58,60 @@ class DSPyAgent:
             tools=self._get_tools(),
             max_iters=self.config.step_limit,
         )
+
+    def _configure_dspy_lm(self):
+        """Configure DSPy LM based on the model provider and settings."""
+        try:
+            model_name = getattr(self.model.config, 'model_name', 'gpt-4o-mini')
+            model_kwargs = getattr(self.model.config, 'model_kwargs', {})
+            
+            # Extract API key from model kwargs or environment
+            api_key = model_kwargs.get('api_key')
+            if not api_key:
+                # Try to get from environment variables
+                api_key = (os.getenv('OPENAI_API_KEY') or 
+                          os.getenv('ANTHROPIC_API_KEY') or 
+                          os.getenv('OPENROUTER_API_KEY'))
+            
+            # Determine provider and configure accordingly
+            model_type = str(type(self.model)).lower()
+            
+            # Handle different model providers
+            if 'anthropic' in model_name.lower() or 'claude' in model_name.lower() or 'anthropic' in model_type:
+                # Anthropic models
+                dspy_lm_name = f"anthropic/{model_name}"
+                api_key = api_key or os.getenv('ANTHROPIC_API_KEY')
+            elif 'openrouter' in model_type:
+                # OpenRouter models
+                dspy_lm_name = f"openai/{model_name}"  # OpenRouter uses OpenAI-compatible API
+                api_key = api_key or os.getenv('OPENROUTER_API_KEY')
+                api_base = "https://openrouter.ai/api/v1"
+                lm = dspy.LM(dspy_lm_name, api_key=api_key, api_base=api_base)
+                dspy.configure(lm=lm)
+                logger.info(f"Configured DSPy with OpenRouter model: {model_name}")
+                return
+            elif 'litellm' in model_type:
+                # LiteLLM models - use the model name as-is
+                dspy_lm_name = model_name
+            else:
+                # Default to OpenAI format
+                dspy_lm_name = f"openai/{model_name}"
+                api_key = api_key or os.getenv('OPENAI_API_KEY')
+            
+            # Configure DSPy with the determined LM
+            if api_key:
+                lm = dspy.LM(dspy_lm_name, api_key=api_key)
+                dspy.configure(lm=lm)
+                logger.info(f"Configured DSPy with model: {dspy_lm_name}")
+            else:
+                # Fallback configuration
+                logger.warning(f"No API key found for model {model_name}, using default DSPy configuration")
+                # DSPy will use its default configuration
+                
+        except Exception as e:
+            logger.error(f"Error configuring DSPy LM: {e}")
+            logger.warning("Falling back to default DSPy configuration")
+            # DSPy will use its default configuration
 
     def _wrap_tool(self, tool: Any) -> Any:
         """Wrap a dspy.Tool to record calls and results into self.messages."""
@@ -99,7 +156,11 @@ class DSPyAgent:
             base_tools = create_environment_tools(self.env)
         else:
             # Fallback to local filesystem tools for non-environment runs
+            from minisweagent.tools import run as run_tools
             base_tools = [
+                # execution tools
+                run_tools.execute_command_tool,
+                run_tools.run_tests_tool,
                 # search tools
                 search_tools.search_code_tool,
                 search_tools.regex_search_tool,
@@ -135,24 +196,31 @@ class DSPyAgent:
             # Capture full DSPy result (JSON-safe) using simple serializer
             self.dspy_result = self._serialize_response(result)
             
-            # Extract the solution from DSPySoftwareEngineeringAgent signature
-            solution_text = (
-                getattr(result, "solution", None)
-                or getattr(result, "answer", None)
-                or getattr(result, "completion", None)
-                or (result.get("solution") if isinstance(result, dict) else None)
-                or (result.get("answer") if isinstance(result, dict) else None)
-                or (result.get("completion") if isinstance(result, dict) else None)
-                or str(result)
-            )
+            # First, check if there's a submit_work tool call in the trajectory
+            submit_work_output = self._extract_submit_work_output()
             
-            # Check if the solution contains a git diff (from submit_work tool)
-            if "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in solution_text:
-                # The solution already contains the proper submission format
-                final_output = solution_text
+            if submit_work_output:
+                # Use the submit_work tool output as the final result
+                final_output = submit_work_output
             else:
-                # Fallback: wrap the solution in the expected format
-                final_output = f"COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n{solution_text}"
+                # Fallback to extracting solution from DSPySoftwareEngineeringAgent signature
+                solution_text = (
+                    getattr(result, "solution", None)
+                    or getattr(result, "answer", None)
+                    or getattr(result, "completion", None)
+                    or (result.get("solution") if isinstance(result, dict) else None)
+                    or (result.get("answer") if isinstance(result, dict) else None)
+                    or (result.get("completion") if isinstance(result, dict) else None)
+                    or str(result)
+                )
+                
+                # Check if the solution contains a git diff (from submit_work tool)
+                if "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in solution_text:
+                    # The solution already contains the proper submission format
+                    final_output = solution_text
+                else:
+                    # Fallback: wrap the solution in the expected format
+                    final_output = f"COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n{solution_text}"
             
             raise Submitted(final_output)
             
@@ -219,6 +287,31 @@ class DSPyAgent:
             return vars(value)
         except Exception:
             return str(value)
+
+    def _extract_submit_work_output(self) -> str | None:
+        """Extract submit_work tool output from trajectory if available."""
+        # Check if dspy_result has the trajectory in _store
+        if not self.dspy_result or "_store" not in self.dspy_result:
+            return None
+            
+        store = self.dspy_result["_store"]
+        if "trajectory" not in store:
+            return None
+            
+        trajectory = store["trajectory"]
+        if not isinstance(trajectory, dict):
+            return None
+            
+        # Search through trajectory for submit_work tool calls
+        for key, value in trajectory.items():
+            if key.startswith("tool_name_") and value == "submit_work":
+                # Find the corresponding observation
+                step_num = key.split("_")[-1]
+                observation_key = f"observation_{step_num}"
+                if observation_key in trajectory:
+                    return trajectory[observation_key]
+        
+        return None
 
     def _serialize_response(self, response: Any):
         """Convert DSPy response to JSON-safe structure (simple and robust)."""
