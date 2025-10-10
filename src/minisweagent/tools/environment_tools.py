@@ -111,7 +111,7 @@ def create_environment_tools(env: Any) -> list[dspy.Tool]:
                 return "No changes to submit. Make sure you have made modifications to the codebase."
             
             # Return the submission format similar to default agent
-            return f"COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n{diff_output}"
+            return f"{diff_output}"
         except Exception as e:
             return f"Error submitting work: {e}"
 

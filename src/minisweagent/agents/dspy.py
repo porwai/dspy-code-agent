@@ -135,24 +135,30 @@ class DSPyAgent:
             # Capture full DSPy result (JSON-safe) using simple serializer
             self.dspy_result = self._serialize_response(result)
             
-            # Extract the solution from DSPySoftwareEngineeringAgent signature
-            solution_text = (
-                getattr(result, "solution", None)
-                or getattr(result, "answer", None)
-                or getattr(result, "completion", None)
-                or (result.get("solution") if isinstance(result, dict) else None)
-                or (result.get("answer") if isinstance(result, dict) else None)
-                or (result.get("completion") if isinstance(result, dict) else None)
-                or str(result)
-            )
-            
-            # Check if the solution contains a git diff (from submit_work tool)
-            if "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in solution_text:
-                # The solution already contains the proper submission format
-                final_output = solution_text
+            # First try to extract submit_work output from trajectory
+            submit_work_output = self._extract_submit_work_output(self.dspy_trajectory, self.dspy_result)
+            if submit_work_output:
+                # Use the raw git diff as the final output
+                final_output = submit_work_output
             else:
-                # Fallback: wrap the solution in the expected format
-                final_output = f"COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n{solution_text}"
+                # Fallback: extract the solution from DSPySoftwareEngineeringAgent signature
+                solution_text = (
+                    getattr(result, "solution", None)
+                    or getattr(result, "answer", None)
+                    or getattr(result, "completion", None)
+                    or (result.get("solution") if isinstance(result, dict) else None)
+                    or (result.get("answer") if isinstance(result, dict) else None)
+                    or (result.get("completion") if isinstance(result, dict) else None)
+                    or str(result)
+                )
+                
+                # Check if the solution contains a git diff (from submit_work tool)
+                if "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in solution_text:
+                    # The solution already contains the proper submission format
+                    final_output = solution_text
+                else:
+                    # Fallback: wrap the solution in the expected format
+                    final_output = f"COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n{solution_text}"
             
             raise Submitted(final_output)
             
@@ -219,6 +225,43 @@ class DSPyAgent:
             return vars(value)
         except Exception:
             return str(value)
+
+    def _extract_submit_work_output(self, trajectory: list, dspy_result: dict) -> str | None:
+        """Extract submit_work tool output from DSPy trajectory."""
+        # First try to extract from the dspy_result._store.trajectory (flat structure)
+        if isinstance(dspy_result, dict) and "_store" in dspy_result:
+            store = dspy_result["_store"]
+            if isinstance(store, dict) and "trajectory" in store:
+                traj_data = store["trajectory"]
+                if isinstance(traj_data, dict):
+                    # Look for submit_work tool calls in the flat trajectory structure
+                    for key, value in traj_data.items():
+                        if key.startswith("tool_name_") and value == "submit_work":
+                            # Find the corresponding observation
+                            step_num = key.split("_")[-1]
+                            observation_key = f"observation_{step_num}"
+                            if observation_key in traj_data:
+                                observation = traj_data[observation_key]
+                                # Return the raw observation (git diff) from submit_work tool
+                                return observation
+        
+        # Fallback: try the serialized trajectory list
+        if trajectory:
+            # The trajectory is a list of dictionaries, each containing trajectory data
+            # Look for submit_work tool calls in the trajectory
+            for step in trajectory:
+                if isinstance(step, dict):
+                    # Check if this step contains tool calls
+                    for key, value in step.items():
+                        if key.startswith("tool_name_") and value == "submit_work":
+                            # Find the corresponding observation
+                            step_num = key.split("_")[-1]
+                            observation_key = f"observation_{step_num}"
+                            if observation_key in step:
+                                observation = step[observation_key]
+                                # Return the raw observation (git diff) from submit_work tool
+                                return observation
+        return None
 
     def _serialize_response(self, response: Any):
         """Convert DSPy response to JSON-safe structure (simple and robust)."""
