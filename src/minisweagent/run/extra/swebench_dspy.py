@@ -102,7 +102,47 @@ def main(
     exit_status, result, extra_info = None, None, None
     try:
         logger.info(f"Running DSPy agent on SWE-bench instance: {instance_spec}")
-        exit_status, result = agent.run(instance["problem_statement"])  # type: ignore[arg-type]
+        
+        # Format the task description with proper SWE-bench context structure
+        task_description = f"""<pr_description>
+        `Consider the following PR description:
+        {instance["problem_statement"]}
+        </pr_description>
+
+        <instructions>
+        # Task Instructions
+
+        ## Overview
+        You're a software engineer working on SWE-Bench bug-fixing tasks. You have access to tools for:
+        - Searching and reading code files
+        - Writing and editing files  
+        - Running tests and commands
+        - Submitting your final work
+
+        Your task is specifically to make changes to non-test files in the current directory in order to fix the issue described in the PR description in a way that is general and consistent with the codebase.
+
+        ## Important Boundaries
+        - MODIFY: Regular source code files in /testbed (this is the working directory for all your subsequent commands)
+        - NEVER modify any file whose path matches ANY of:
+        - **/tests/**, **/test/**, **/testing/**
+        - **/*_test.py, **/test_*.py, **/conftest.py
+        - **/pytest.ini, **/tox.ini
+        - **/pyproject.toml, **/setup.cfg, **/setup.py
+        - **/.pre-commit-config.yaml, **/.flake8, **/.pylintrc
+
+        ## Recommended Workflow
+        1. Analyze the codebase by finding and reading relevant files
+        2. Create a script to reproduce the issue
+        3. Edit the source code to resolve the issue
+        4. Verify your fix works by running your script again
+        5. Test edge cases to ensure your fix is robust
+        6. Submit your work using the submit_work tool when confident
+
+        ## Submission
+        When you're confident your solution is complete, use the submit_work tool to generate and submit your unified diff patch.
+        </instructions>"""
+
+        exit_status, result = agent.run(task_description)  # type: ignore[arg-type]
         logger.info(f"Agent completed with status: {exit_status}")
         
     except Exception as e:
