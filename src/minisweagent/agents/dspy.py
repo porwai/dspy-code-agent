@@ -8,6 +8,7 @@ from typing import Any
 import os
 import json
 from dotenv import load_dotenv
+from minisweagent.utils.log import logger
 
 from minisweagent import Environment, Model
 from minisweagent.tools import search as search_tools
@@ -31,8 +32,16 @@ class DSPyAgentConfig:
     step_limit: int = 6
     cost_limit: float = 3.0
 
-lm = dspy.LM('openai/gpt-4o-mini', api_key=os.environ["OPENAI_API_KEY"])# Configure DSPy to use OpenAI
-dspy.configure(lm=lm)
+# =============================================================================
+# HARDCODED MODEL CONFIGURATION
+# =============================================================================
+# Set your model here - this is the ONLY place you need to change the model
+MODEL_NAME = 'openrouter/qwen/qwen-2.5-coder-32b-instruct'
+API_KEY_ENV = 'OPENROUTER_API_KEY'  # Set this environment variable
+
+# Configure DSPy with the hardcoded model
+qwen_lm = dspy.LM(MODEL_NAME, api_key=os.environ.get(API_KEY_ENV, ""))
+dspy.configure(lm=qwen_lm)
 
 class DSPyAgent:
     """DSPy-based agent that integrates with mini-SWE-agent framework."""
@@ -55,6 +64,7 @@ class DSPyAgent:
             tools=self._get_tools(),
             max_iters=self.config.step_limit,
         )
+
 
     def _wrap_tool(self, tool: Any) -> Any:
         """Wrap a dspy.Tool to record calls and results into self.messages."""

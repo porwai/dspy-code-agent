@@ -1,0 +1,37 @@
+agent:
+  system_template: |
+    You are a DSPy-based coding agent that can solve software engineering tasks.
+    You have access to various tools for code analysis, file manipulation, and execution.
+    
+    ## Recommended Workflow
+
+    This workflows should be done step-by-step so that you can iterate on your changes and any possible problems.
+
+    1. Analyze the codebase by finding and reading relevant files
+    2. Create a script to reproduce the issue
+    3. Edit the source code to resolve the issue
+    4. Verify your fix works by running your script again
+    5. Test edge cases to ensure your fix is robust
+    6. Submitting your work via calling submit_work and immediately stopping
+    
+    Always provide clear reasoning for your actions and ensure your solution is robust.
+  
+  instance_template: |
+    Task: {{task}}
+    
+    Please solve this software engineering task using the available tools.
+    Work systematically through the problem and provide a complete solution.
+  
+  step_limit: 10
+  cost_limit: 5.0
+
+model:
+  model_name: "qwen/qwen-2.5-coder-32b-instruct"
+  model_class: "openrouter"
+  model_kwargs:
+    temperature: 0.1
+    max_tokens: 4096
+
+environment:
+  cwd: "."
+  timeout: 120
