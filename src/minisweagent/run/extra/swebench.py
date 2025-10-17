@@ -65,7 +65,6 @@ class ProgressTrackingAgent(DefaultAgent):
         )
         return super().step()
 
-
 def get_swebench_docker_image_name(instance: dict) -> str:
     """Get the image name for a SWEBench instance."""
     image_name = instance.get("image_name", None)
