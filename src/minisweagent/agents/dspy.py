@@ -9,6 +9,8 @@ import os
 import json
 from dotenv import load_dotenv
 
+import mlflow 
+
 from minisweagent import Environment, Model
 from minisweagent.tools import search as search_tools
 from minisweagent.tools import read_write as rw_tools
@@ -30,6 +32,10 @@ class DSPyAgentConfig:
     system_template: str = "You are a DSPy coding agent for SWE-bench tasks."
     step_limit: int = 6
     cost_limit: float = 3.0
+    # MLflow tracing (optional)
+    mlflow_enable: bool = False
+    mlflow_tracking_uri: str | None = None
+    mlflow_experiment: str = "DSPy"
 
 # lm = dspy.LM('openai/gpt-4o-mini', api_key=os.environ["OPENAI_API_KEY"])# Configure DSPy to use OpenAI
 lm = dspy.LM('openrouter/qwen/qwen3-coder-30b-a3b-instruct', api_key=os.environ["OPENROUTER_API_KEY"], max_tokens=32000, temperature=0.7) # Configure DSPy to use OpenRouter Qwen
@@ -49,6 +55,9 @@ class DSPyAgent:
         self.dspy_trajectory: list = []
         self.dspy_result: dict = {}
 
+        # Optionally enable MLflow DSPy autologging for tracing/observability
+        self._maybe_enable_mlflow_tracing()
+
         # Initialize DSPy ReAct agent with basic tools
         # Note: You'll need to implement or import your actual tools
         self.dspy_agent = dspy.ReAct(
@@ -56,6 +65,34 @@ class DSPyAgent:
             tools=self._get_tools(),
             max_iters=self.config.step_limit,
         )
+
+    def _maybe_enable_mlflow_tracing(self) -> None:
+        """Configure MLflow tracking URI/experiment if enabled. 
+        
+        Note: mlflow.dspy.autolog() should be called once from the main thread,
+        not from worker threads. This method only sets the tracking URI/experiment.
+        
+        Honors, in order of precedence:
+        - self.config.mlflow_enable
+        - ENV: MLFLOW_DSPY_ENABLE in {"1","true","yes"}
+        """
+        import threading
+        enabled = self.config.mlflow_enable or str(os.getenv("MLFLOW_DSPY_ENABLE", "")).lower() in {"1", "true", "yes"}
+        if not enabled:
+            return
+        tracking_uri = self.config.mlflow_tracking_uri or os.getenv("MLFLOW_TRACKING_URI") or "http://127.0.0.1:5000"
+        experiment = (self.config.mlflow_experiment or os.getenv("MLFLOW_EXPERIMENT") or "DSPy")
+        mlflow.set_tracking_uri(tracking_uri)
+        mlflow.set_experiment(experiment)
+        # Only call autolog from main thread (should already be done by batch script)
+        # Worker threads should not call mlflow.dspy.autolog() as it modifies dspy.settings
+        if threading.current_thread() is threading.main_thread():
+            if hasattr(mlflow, "dspy") and hasattr(mlflow.dspy, "autolog"):
+                try:
+                    mlflow.dspy.autolog()
+                except RuntimeError:
+                    # Already configured, ignore
+                    pass
 
     def _wrap_tool(self, tool: Any) -> Any:
         """Wrap a dspy.Tool to record calls and results into self.messages."""

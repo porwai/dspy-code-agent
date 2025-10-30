@@ -126,6 +126,7 @@ def process_instance(
 
     agent = None
     extra_info = None
+    env = None
 
     try:
         env = get_sb_environment(config, instance)
@@ -161,6 +162,12 @@ def process_instance(
         exit_status, result = type(e).__name__, str(e)
         extra_info = {"traceback": traceback.format_exc()}
     finally:
+        # Explicitly cleanup the environment/container to ensure clean state for each run
+        if env is not None:
+            try:
+                env.cleanup()
+            except Exception as e:
+                logger.warning(f"Failed to cleanup environment for {instance_id}: {e}")
         save_traj(
             agent,
             instance_dir / f"{instance_id}.traj.json",
@@ -237,6 +244,23 @@ def main(
     config_path = get_config_path(config_spec)
     logger.info(f"Loading agent config from '{config_path}'")
     config = yaml.safe_load(config_path.read_text())
+    
+    # Configure MLflow DSPy tracing once in the main thread (if enabled)
+    import mlflow
+    agent_cfg = config.get("agent", {}) if isinstance(config, dict) else {}
+    enable_tracing = agent_cfg.get("mlflow_enable") or str(os.getenv("MLFLOW_DSPY_ENABLE", "")).lower() in {"1", "true", "yes"}
+    if enable_tracing:
+        tracking_uri = agent_cfg.get("mlflow_tracking_uri") or os.getenv("MLFLOW_TRACKING_URI") or "http://127.0.0.1:5000"
+        experiment = agent_cfg.get("mlflow_experiment") or os.getenv("MLFLOW_EXPERIMENT") or "DSPy"
+        mlflow.set_tracking_uri(tracking_uri)
+        mlflow.set_experiment(experiment)
+        if hasattr(mlflow, "dspy") and hasattr(mlflow.dspy, "autolog"):
+            try:
+                mlflow.dspy.autolog()
+                logger.info(f"MLflow DSPy autolog enabled: uri={tracking_uri} experiment={experiment}")
+            except Exception as e:
+                logger.warning(f"MLflow DSPy autolog failed: {e}")
+    
     if environment_class is not None:
         config.setdefault("environment", {})["environment_class"] = environment_class
     if model is not None:

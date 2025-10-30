@@ -49,6 +49,12 @@ class DockerEnvironment:
     def _start_container(self):
         """Start the Docker container and return the container ID."""
         container_name = f"minisweagent-{uuid.uuid4().hex[:8]}"
+        # First, try to remove any existing container with the same name (unlikely but possible)
+        subprocess.run(
+            [self.config.executable, "rm", "-f", container_name],
+            capture_output=True,
+            timeout=5,
+        )
         cmd = [
             self.config.executable,
             "run",

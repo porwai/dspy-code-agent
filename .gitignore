@@ -17,6 +17,10 @@ __pycache__/
 # C extensions
 *.so
 
+# mlflow
+mlartifacts/
+mydb.sqlite
+
 # Distribution / packaging
 .Python
 build/
