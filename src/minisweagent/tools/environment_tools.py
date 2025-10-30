@@ -268,104 +268,78 @@ def create_environment_tools(env: Any) -> list[dspy.Tool]:
 
         except Exception as e:
             return f"Error performing {command}: {e}"
-
+    
     # -------------------------
     # Content Search (semantic grep)
     # -------------------------
     def file_content_search(query: str,
                             exclude_pattern: Optional[str] = "*.pyc,*.git*,__pycache__,*.bin,*.exe,*.dll,*.so") -> str:
-        """Search for text content within project files with context.
-        
-        Performs regex-based search across all files in the project directory,
-        excluding common build artifacts and temporary files.
-        
+        """Search text content within files for a pattern (regex or plain text).
+
+        Efficiently searches across files in the environment using `grep`,
+        skipping binary/cache files and limiting context for readability.
+
         Args:
-            query: Regex pattern to search for (case-insensitive)
-            exclude_pattern: Comma-separated glob patterns to exclude (default excludes common artifacts)
-            
+            query: The search term or regex pattern to look for
+            exclude_pattern: Comma-separated glob patterns to exclude from search
+
         Returns:
-            Formatted search results with file paths, line numbers, and context,
-            or message indicating no matches found
+            Formatted matches with file paths, line numbers, and context.
         """
         if not query.strip():
             return "Error: Empty search query."
-        results, matches_found, files_searched = [], 0, 0
-        context_lines, max_matches, max_files = 3, 10, 50
-        exclude_patterns = [p.strip() for p in exclude_pattern.split(',')] if exclude_pattern else []
+
         try:
-            # Use find command to get all files in environment with proper exclusions
+            context_lines = 3
+            max_matches = 10
+            max_files = 50
+            matches_found = 0
+            results = []
+
+            # Build find command with exclusions
+            exclude_patterns = [p.strip() for p in exclude_pattern.split(',')] if exclude_pattern else []
             find_cmd = "find . -type f"
-            if exclude_pattern:
-                # Add exclusion patterns to find command
-                for pattern in exclude_patterns:
-                    if pattern.strip():
-                        find_cmd += f" -not -name '{pattern.strip()}'"
-            
+            for pattern in exclude_patterns:
+                if pattern:
+                    find_cmd += f" -not -path '*/{pattern}' -not -name '{pattern}'"
+
+            # Exclude known large/unhelpful files
+            find_cmd += " -not -name 'input.json' -not -name 'agent_args.json' -not -name 'steps.json' -not -name 'main.py'"
+
+            # Execute find
             res = _exec(find_cmd)
             if res.get("returncode") != 0:
-                return f"Error finding files: {res.get('output', '')}"
-            
+                return f"Error listing files: {res.get('output', '')}"
+
             file_paths = [line.strip() for line in res.get("output", "").splitlines() if line.strip()]
-            
-            # Filter out unwanted files
-            filtered_paths = []
+            file_paths = file_paths[:max_files]
+
             for file_path in file_paths:
-                filename = os.path.basename(file_path)
-                if filename not in ["input.json", "agent_args.json", "steps.json", "main.py"]:
-                    filtered_paths.append(file_path)
-            
-            # Limit number of files to search
-            if len(filtered_paths) > max_files:
-                filtered_paths = filtered_paths[:max_files]
-            
-            for file_path in filtered_paths:
                 if matches_found >= max_matches:
                     break
-                
-                files_searched += 1
-                
-                # Use grep to search within the file (more efficient than reading entire file)
-                # Escape special regex characters for literal search
-                escaped_query = query.replace('(', '\\(').replace(')', '\\)').replace('[', '\\[').replace(']', '\\]').replace('*', '\\*').replace('+', '\\+').replace('?', '\\?').replace('{', '\\{').replace('}', '\\}').replace('|', '\\|').replace('^', '\\^').replace('$', '\\$').replace('.', '\\.')
-                grep_cmd = f"grep -n -i '{escaped_query}' {shlex.quote(file_path)}"
-                res = _exec(grep_cmd)
-                
-                if res.get("returncode") == 0 and res.get("output", "").strip():
-                    # Found matches, get context around each match
-                    grep_lines = res.get("output", "").strip().splitlines()
-                    
-                    for grep_line in grep_lines[:max_matches - matches_found]:
-                        if matches_found >= max_matches:
-                            break
-                            
-                        # Extract line number from grep output (format: "line_num:content")
-                        if ':' in grep_line:
-                            line_num_str, content = grep_line.split(':', 1)
-                            try:
-                                line_num = int(line_num_str)
-                                
-                                # Get context around the match
-                                context_cmd = f"sed -n '{max(1, line_num-context_lines)},{min(line_num+context_lines, 10000)}p' {shlex.quote(file_path)}"
-                                context_res = _exec(context_cmd)
-                                
-                                if context_res.get("returncode") == 0:
-                                    context_lines_content = context_res.get("output", "").splitlines()
-                                    snippet = '\n'.join(context_lines_content)
-                                    
-                                    if len(snippet) > 1000:
-                                        snippet = snippet[:500] + "\n... (truncated) ...\n" + snippet[-500:]
-                                    
-                                    results.append(f"File: {file_path} (line {line_num})\n{snippet}\n---")
-                                    matches_found += 1
-                            except ValueError:
-                                continue  # Skip malformed grep output
-            if not results:
-                return f"No matches for '{query}' in {files_searched} files."
-            summary = f"Found {matches_found} matches for '{query}' in {files_searched} files.\n\n"
-            return summary + "\n".join(results)
-        except Exception as e:
-            return f"Error searching files: {e}"
 
+                # Grep with context
+                grep_cmd = f"grep -i -n -C {context_lines} {shlex.quote(query)} {shlex.quote(file_path)}"
+                grep_res = _exec(grep_cmd)
+
+                if grep_res.get("returncode") == 0 and grep_res.get("output", "").strip():
+                    output = grep_res["output"].strip()
+                    # Truncate overly long outputs
+                    if len(output) > 2000:
+                        output = output[:1000] + "\n... (truncated) ...\n" + output[-1000:]
+
+                    results.append(f"File: {file_path}\n{output}\n---")
+                    matches_found += 1
+
+            if not results:
+                return f"No matches found for '{query}' in searched files."
+
+            summary = f"Found {matches_found} matches for '{query}' across {len(file_paths)} files.\n\n"
+            return summary + "\n".join(results)
+
+        except Exception as e:
+            return f"Error searching files: {type(e).__name__}: {e}"
+    
     # -------------------------
     # Minimal Test + Submit
     # -------------------------
@@ -381,7 +355,7 @@ def create_environment_tools(env: Any) -> list[dspy.Tool]:
         res = _exec("pytest -q || python -m unittest -q || echo 'No tests found'")
         return res.get("output", "(no output)")
 
-    def submit_work() -> str:
+    def finish() -> str:
         """Submit work by generating git patch diff and terminating the session.
         
         Stages all changes and generates a git diff showing the modifications
@@ -392,12 +366,14 @@ def create_environment_tools(env: Any) -> list[dspy.Tool]:
             Git diff output showing all staged changes, or error message if no diff available
         """
         _exec("git add -A")
-        diff = _exec("git diff --cached --no-color --no-ext-diff --binary")
+        # Use proper git diff format for patches
+        diff = _exec("git diff --cached --no-color --no-ext-diff")
         result = diff.get("output", "ERROR: No diff output")
+        # Ensure the diff ends with a newline; some patch tools error if missing
+        if result and not result.endswith("\n"):
+            result += "\n"
         
         # Add termination signal to make it clear this should end the session
-        if result != "ERROR: No diff output":
-            result += "\n\n=== TASK COMPLETED - AGENT SHOULD TERMINATE ==="
         
         return result
 
@@ -540,7 +516,7 @@ def create_environment_tools(env: Any) -> list[dspy.Tool]:
                   args={"pattern":{"type":"string"},
                         "path":{"type":"string","default":"."},
                         "options":{"type":"string","default":"-n -i"}}),
-        dspy.Tool(func=submit_work, name="submit_work",
+        dspy.Tool(func=finish, name="finish",
                   desc="""Generate a git patch diff of all changes and terminate the session.
          
          This tool should ONLY be called when the task is completely finished.
@@ -549,4 +525,18 @@ def create_environment_tools(env: Any) -> list[dspy.Tool]:
          
          Returns:
              Git diff output showing all staged changes with termination signal"""),
+        dspy.Tool(func=file_content_search, name="file_content_search",
+                  desc="""Search text content within files for a pattern (regex or plain text).
+
+        Efficiently searches across files in the environment using `grep`,
+        skipping binary/cache files and limiting context for readability.
+
+        Args:
+            query: The search term or regex pattern to look for
+            exclude_pattern: Comma-separated glob patterns to exclude from search
+
+        Returns:
+            Formatted matches with file paths, line numbers, and context.""",
+            args={"query":{"type":"string"},
+                        "exclude_pattern":{"type":"string","optional":True}}),
     ]
