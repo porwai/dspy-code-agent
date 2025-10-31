@@ -36,7 +36,7 @@ agent_runs = [
 api_key = os.getenv("DOCENT_API_KEY")
 client = Docent(api_key=api_key)
 collection_id = client.create_collection(
-    name="DSPy MLflow Traces",
+    name="DSPy MLflow Traces 3",
     description="Agent runs from MLflow DSPy traces",
 )
 client.add_agent_runs(collection_id, agent_runs)

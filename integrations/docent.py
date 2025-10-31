@@ -437,34 +437,10 @@ def _convert_mlflow_trace_to_docent(trace_obj: Any, metadata: dict | None = None
             # Map span types to message roles
             # DSPy spans typically have names like "dspy.ReAct", "dspy.LM", "tool_name", etc.
             if "ReAct" in span_name or "agent" in span_name.lower():
-                # User task
-                if span_inputs and "task_description" in span_inputs:
-                    task_content = span_inputs.get("task_description", "")
-                    if task_content:
-                        messages.append(parse_chat_message({
-                            "role": "user",
-                            "content": task_content,
-                        }))
-                else:
-                    maybe_emit_simple("user", span_inputs)
-                # Any embedded messages
+                # Skip emitting initial input (task_description) and final output (solution/answer)
+                # Only include embedded chat-style messages, if present
                 if span_inputs and "messages" in span_inputs:
                     emit_messages(span_inputs.get("messages"))
-                # Agent answer
-                if span_outputs:
-                    solution = (
-                        span_outputs.get("solution")
-                        or span_outputs.get("answer")
-                        or span_outputs.get("final_answer")
-                        or ""
-                    )
-                    if solution:
-                        messages.append(parse_chat_message({
-                            "role": "assistant",
-                            "content": str(solution),
-                        }))
-                    else:
-                        maybe_emit_simple("assistant", span_outputs)
 
             elif "lm" in span_name.lower() or "language_model" in span_name.lower():
                 # LLM call - capture prompts/responses if surfaced as chat messages
