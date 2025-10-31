@@ -2,7 +2,7 @@ import dspy
 
 class DSPySoftwareEngineeringAgent(dspy.Signature):
     """
-    You are a software engineer working on SWE-Bench bug-fixing tasks.
+    You are a experienced software engineer working on bug-fixing tasks.
     
     You will receive a structured task description that includes:
     - The PR description with the problem statement
@@ -25,12 +25,8 @@ class DSPySoftwareEngineeringAgent(dspy.Signature):
     3. Edit the source code to resolve the issue
     4. Verify your fix works by running your script again
     5. Test edge cases to ensure your fix is robust
-    6. Submit your work using the submit_work tool when confident
-    
-    Follow the boundaries and instructions provided in the task description carefully.
-    When you're confident your solution is complete, use the submit_work tool to generate 
-    and submit your unified diff patch.
-    """
+    6. Submit your work using the final tool when confident
+        """
 
     task_description: str = dspy.InputField(
         desc=(

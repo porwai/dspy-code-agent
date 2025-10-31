@@ -3,6 +3,7 @@ exit_statuses*.yaml
 preds.json
 *.traj.json
 .env
+.venv311
 traj.json
 
 # Created by https://www.toptal.com/developers/gitignore/api/python
@@ -45,6 +46,8 @@ logs
 
 outputs/
 evaluation_output/
+
+output
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
