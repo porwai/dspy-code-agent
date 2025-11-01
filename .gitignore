@@ -22,6 +22,9 @@ __pycache__/
 mlartifacts/
 mydb.sqlite
 
+mlruns
+openrouter__qwen__qwen3-coder-30b-a3b-instruct.mlflow.json
+
 # Distribution / packaging
 .Python
 build/
