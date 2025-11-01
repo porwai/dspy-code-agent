@@ -24,6 +24,11 @@ agent:
   
   step_limit: 10
   cost_limit: 5.0
+  # MLflow tracing configuration
+  # Enable tracing by setting mlflow_enable: true OR set MLFLOW_DSPY_ENABLE=1 in .env
+  mlflow_enable: false  # Set to true to enable, or use env var MLFLOW_DSPY_ENABLE=1
+  mlflow_tracking_uri: null  # Default: http://127.0.0.1:5000 (or MLFLOW_TRACKING_URI env var)
+  mlflow_experiment: "DSPy"  # Default experiment name (or MLFLOW_EXPERIMENT env var)
 
 model:
   model_name: "gpt-4o"

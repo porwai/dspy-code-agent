@@ -507,10 +507,55 @@ def _convert_mlflow_trace_to_docent(trace_obj: Any, metadata: dict | None = None
             if hasattr(span, "child_spans") and span.child_spans:
                 extract_from_spans(span.child_spans, span_name)
     
-    # Extract messages from all spans (not only root) to maximize recall
+    # Extract final prediction/result from trace spans
     all_spans = trace_obj.data.spans if hasattr(trace_obj, "data") and hasattr(trace_obj.data, "spans") else []
+    final_prediction = None
+    
+    def extract_final_result(span: Any) -> str | None:
+        """Extract final prediction/result from a span's outputs."""
+        if not span:
+            return None
+        
+        span_outputs = span.outputs if hasattr(span, "outputs") else None
+        span_attributes = span.attributes if hasattr(span, "attributes") else {}
+        
+        # Normalize outputs (check attributes if outputs is empty)
+        if span_outputs in (None, {}, []):
+            span_outputs = span_attributes.get("mlflow.spanOutputs") if isinstance(span_attributes, dict) else None
+        
+        if span_outputs:
+            # Look for solution/answer/completion in outputs
+            if isinstance(span_outputs, dict):
+                result = (
+                    span_outputs.get("solution")
+                    or span_outputs.get("answer")
+                    or span_outputs.get("completion")
+                    or span_outputs.get("result")
+                    or span_outputs.get("output")
+                )
+                if result:
+                    return str(result)
+            elif isinstance(span_outputs, str) and span_outputs.strip():
+                # If outputs is directly a string
+                return span_outputs
+        
+        # Recurse into child spans (depth-first, prefer deeper results)
+        if hasattr(span, "child_spans") and span.child_spans:
+            for child in span.child_spans:
+                result = extract_final_result(child)
+                if result:
+                    return result
+        
+        return None
+    
     if all_spans:
         extract_from_spans(all_spans)
+        # Try to extract from root spans (check all root-level spans)
+        for root_span in all_spans:
+            result = extract_final_result(root_span)
+            if result:
+                final_prediction = result
+                break
     
     # If no messages extracted, create a basic message from trace
     if not messages:
@@ -536,13 +581,38 @@ def _convert_mlflow_trace_to_docent(trace_obj: Any, metadata: dict | None = None
         "trace_id": trace_id,
         "status": status,
         "execution_time_ms": execution_time,
+        # Extract commonly used tags to top level for easier access
+        "agent_type": tags.get("agent_type"),
+        "model_class": tags.get("model_class"),
+        "environment_class": tags.get("environment_class"),
+        "step_limit": tags.get("step_limit"),
+        "cost_limit": tags.get("cost_limit"),
+        "platform": tags.get("platform"),
+        "python_version": tags.get("python_version"),
+        # SWE-bench specific tags (if available)
+        "instance_id": tags.get("instance_id"),
+        "dataset": tags.get("dataset"),
+        "subset": tags.get("subset"),
+        "split": tags.get("split"),
+        "repo": tags.get("repo"),
+        "base_commit": tags.get("base_commit"),
+        # Final prediction/result extracted from trace
+        "prediction": final_prediction,
         "mlflow": {
-            "tags": tags,
+            "tags": tags,  # All tags preserved here
             "experiment_id": safe_get(trace_info, "experiment_id"),
             "timestamp_ms": safe_get(trace_info, "timestamp_ms"),
             "request_id": safe_get(trace_info, "request_id"),
         },
     }
+    
+    # Use instance_id as task_id if available (more specific than trace_id)
+    if tags.get("instance_id"):
+        metadata_dict["task_id"] = tags.get("instance_id")
+        metadata_dict["benchmark_id"] = tags.get("instance_id")
+    
+    # Remove None values from top-level metadata
+    metadata_dict = {k: v for k, v in metadata_dict.items() if v is not None}
 
     # Merge caller-provided metadata last to allow overrides
     if metadata:

@@ -145,7 +145,19 @@ def process_instance(
         </pr_description>
         """
 
-        exit_status, result = agent.run(task_description)
+        # Pass SWE-bench metadata for trace tagging
+        dataset_path = config.get("_dataset_path", "")  # Set by main() if available
+        subset = config.get("_subset", "")
+        split = config.get("_split", "")
+        exit_status, result = agent.run(
+            task_description,
+            instance_id=instance_id,
+            dataset=dataset_path,
+            subset=subset,
+            split=split,
+            repo=instance.get("repo"),
+            base_commit=instance.get("base_commit"),
+        )
         
         # If possible, capture a unified diff from the repo as the submission
         try:
@@ -244,6 +256,13 @@ def main(
     config_path = get_config_path(config_spec)
     logger.info(f"Loading agent config from '{config_path}'")
     config = yaml.safe_load(config_path.read_text())
+    
+    # Store dataset metadata in config for process_instance to access
+    if not isinstance(config, dict):
+        config = {}
+    config["_dataset_path"] = dataset_path
+    config["_subset"] = subset
+    config["_split"] = split
     
     # Configure MLflow DSPy tracing once in the main thread (if enabled)
     import mlflow

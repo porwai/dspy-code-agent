@@ -21,7 +21,7 @@ from integrations.docent import load_mlflow_traces, load_dspy_trace_to_docent
 # 1) Convert MLflow traces → AgentRun(s)
 traces = load_mlflow_traces(
     tracking_uri="http://127.0.0.1:5000",
-    experiment_name="DSPy",
+    experiment_name="ml_flow_test_4",
     filter_string="status = 'OK'",
     order_by=["timestamp_ms DESC"],
     max_results=5,

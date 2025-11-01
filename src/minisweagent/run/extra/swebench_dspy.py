@@ -142,7 +142,16 @@ def main(
         When you're confident your solution is complete, use the submit_work tool to generate and submit your unified diff patch.
         </instructions>"""
 
-        exit_status, result = agent.run(task_description)  # type: ignore[arg-type]
+        # Pass SWE-bench metadata for trace tagging
+        exit_status, result = agent.run(
+            task_description,
+            instance_id=instance["instance_id"],
+            dataset=dataset_path,
+            subset=subset,
+            split=split,
+            repo=instance.get("repo"),
+            base_commit=instance.get("base_commit"),
+        )  # type: ignore[arg-type]
         logger.info(f"Agent completed with status: {exit_status}")
         
     except Exception as e:

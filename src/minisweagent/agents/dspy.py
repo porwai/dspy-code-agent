@@ -7,9 +7,16 @@ from dataclasses import fields
 from typing import Any
 import os
 import json
+from pathlib import Path
 from dotenv import load_dotenv
 
-import mlflow 
+import mlflow
+
+# Load .env from repo root if available (in addition to global config)
+_repo_root = Path(__file__).resolve().parents[3]  # src/minisweagent/agents/dspy.py -> repo root
+_env_path = _repo_root / ".env"
+if _env_path.exists():
+    load_dotenv(dotenv_path=str(_env_path), override=False)  # Don't override existing env vars 
 
 from minisweagent import Environment, Model
 from minisweagent.tools import search as search_tools
@@ -48,6 +55,11 @@ class DSPyAgent:
         cfg_field_names = {f.name for f in fields(config_class)}
         cfg_kwargs = {k: v for k, v in kwargs.items() if k in cfg_field_names}
         self.config = config_class(**cfg_kwargs)
+        
+        # Override mlflow_experiment from env var if config didn't explicitly set it
+        # This ensures env var takes precedence over default "DSPy" value
+        if "mlflow_experiment" not in cfg_kwargs and os.getenv("MLFLOW_EXPERIMENT"):
+            self.config.mlflow_experiment = os.getenv("MLFLOW_EXPERIMENT")
         self.model = model
         self.env = env
         self.messages: list[dict] = []
@@ -83,7 +95,19 @@ class DSPyAgent:
         tracking_uri = self.config.mlflow_tracking_uri or os.getenv("MLFLOW_TRACKING_URI") or "http://127.0.0.1:5000"
         experiment = (self.config.mlflow_experiment or os.getenv("MLFLOW_EXPERIMENT") or "DSPy")
         mlflow.set_tracking_uri(tracking_uri)
+        
+        # Ensure experiment exists and is set before autolog (critical!)
+        try:
+            from mlflow.tracking import MlflowClient
+            client = MlflowClient(tracking_uri=tracking_uri)
+            exp = client.get_experiment_by_name(experiment)
+            if exp is None:
+                client.create_experiment(experiment)
+        except Exception:
+            pass  # Fallback to set_experiment if client fails
+        
         mlflow.set_experiment(experiment)
+        
         # Only call autolog from main thread (should already be done by batch script)
         # Worker threads should not call mlflow.dspy.autolog() as it modifies dspy.settings
         if threading.current_thread() is threading.main_thread():
@@ -156,12 +180,150 @@ class DSPyAgent:
             ]
         return [self._wrap_tool(t) for t in base_tools]
 
+    def _collect_trace_tags(self, task: str, **kwargs) -> dict[str, str]:
+        """Collect metadata tags for MLflow trace."""
+        tags: dict[str, str] = {}
+        
+        # Agent type
+        tags["agent_type"] = "dspy"
+        
+        # Task description
+        tags["task"] = task[:500] if len(task) > 500 else task  # Limit length
+        
+        # Config settings
+        tags["step_limit"] = str(self.config.step_limit)
+        tags["cost_limit"] = str(self.config.cost_limit)
+        if self.config.mlflow_experiment:
+            tags["experiment"] = self.config.mlflow_experiment
+        
+        # Model information
+        model_name = "unknown"
+        try:
+            # Try to get model name from DSPy settings
+            if hasattr(dspy, "settings") and hasattr(dspy.settings, "lm"):
+                dspy_lm = dspy.settings.lm
+                if hasattr(dspy_lm, "model_name"):
+                    model_name = str(dspy_lm.model_name)
+                elif hasattr(dspy_lm, "model"):
+                    model_name = str(dspy_lm.model)
+                elif hasattr(dspy_lm, "name"):
+                    model_name = str(dspy_lm.name)
+            # Also try module-level lm variable
+            if model_name == "unknown" and hasattr(lm, "model_name"):
+                model_name = str(lm.model_name)
+            elif model_name == "unknown" and hasattr(lm, "model"):
+                model_name = str(lm.model)
+            # Fallback to self.model if available
+            if model_name == "unknown" and hasattr(self.model, "config"):
+                if hasattr(self.model.config, "model_name"):
+                    model_name = str(self.model.config.model_name)
+        except Exception:
+            pass
+        tags["model"] = model_name
+        tags["model_name"] = model_name
+        
+        # Model class name
+        model_class_name = type(self.model).__name__
+        tags["model_class"] = model_class_name
+        
+        # Environment information
+        env_class_name = type(self.env).__name__
+        tags["environment_class"] = env_class_name
+        if hasattr(self.env, "config"):
+            if hasattr(self.env.config, "__dict__"):
+                env_config_dict = {k: str(v) for k, v in self.env.config.__dict__.items() if not k.startswith("_")}
+                for k, v in list(env_config_dict.items())[:5]:  # Limit to first 5 keys
+                    tags[f"env_{k}"] = v[:200]  # Limit value length
+        
+        # SWE-bench specific metadata (recognize standard fields)
+        swebench_fields = {
+            "instance_id": "instance_id",
+            "dataset": "dataset",
+            "subset": "subset", 
+            "split": "split",
+            "repo": "repo",
+            "base_commit": "base_commit",
+            "patch": "patch",
+            "test_patch": "test_patch",
+        }
+        for field_name, tag_key in swebench_fields.items():
+            if field_name in kwargs and kwargs[field_name] is not None:
+                val = str(kwargs[field_name])
+                tags[tag_key] = val[:200] if len(val) > 200 else val
+        
+        # Additional template vars from kwargs (exclude already-processed SWE-bench fields)
+        swebench_keys = set(swebench_fields.keys())
+        other_kwargs = {k: v for k, v in kwargs.items() if k not in swebench_keys}
+        if other_kwargs:
+            for k, v in list(other_kwargs.items())[:10]:  # Limit to first 10 kwargs
+                if isinstance(v, (str, int, float, bool)):
+                    tags[f"extra_{k}"] = str(v)[:200]
+                elif v is None:
+                    tags[f"extra_{k}"] = "None"
+        
+        # System/environment context
+        import platform
+        tags["platform"] = platform.system()
+        tags["python_version"] = platform.python_version()
+        
+        return tags
+
     def run(self, task: str, **kwargs) -> tuple[str, str]:
         """Run the agent on a task. Returns exit status and result."""
         self.extra_template_vars |= {"task": task, **kwargs}
         self.messages = []
         self.dspy_trajectory = []
         self.dspy_result = {}
+        
+        # Ensure MLflow experiment is set before creating traces (important for correct experiment)
+        try:
+            if self.config.mlflow_enable or str(os.getenv("MLFLOW_DSPY_ENABLE", "")).lower() in {"1", "true", "yes"}:
+                # Set experiment explicitly before trace creation
+                experiment = (self.config.mlflow_experiment or os.getenv("MLFLOW_EXPERIMENT") or "DSPy")
+                tracking_uri = self.config.mlflow_tracking_uri or os.getenv("MLFLOW_TRACKING_URI") or "http://127.0.0.1:5000"
+                mlflow.set_tracking_uri(tracking_uri)
+                
+                # Get experiment ID (create if doesn't exist)
+                from mlflow.tracking import MlflowClient
+                client = MlflowClient(tracking_uri=tracking_uri)
+                try:
+                    exp = client.get_experiment_by_name(experiment)
+                    if exp is None:
+                        exp_id = client.create_experiment(experiment)
+                        from minisweagent.utils.log import logger
+                        logger.info(f"Created MLflow experiment: {experiment} (id: {exp_id})")
+                    else:
+                        exp_id = exp.experiment_id
+                except Exception as e:
+                    from minisweagent.utils.log import logger
+                    logger.warning(f"Failed to get/create experiment {experiment}: {e}, using set_experiment()")
+                    mlflow.set_experiment(experiment)
+                    exp_id = None
+                
+                # Explicitly set experiment (must be done before trace creation)
+                mlflow.set_experiment(experiment)
+                
+                # Verify experiment is actually set (critical for debugging)
+                from minisweagent.utils.log import logger
+                try:
+                    from mlflow.tracking import MlflowClient
+                    verify_client = MlflowClient(tracking_uri=tracking_uri)
+                    current_exp = verify_client.get_experiment_by_name(experiment)
+                    if current_exp:
+                        logger.info(f"MLflow experiment verified: {experiment} (id: {current_exp.experiment_id}, tracking_uri: {tracking_uri})")
+                    else:
+                        logger.warning(f"MLflow experiment {experiment} not found after setting!")
+                except Exception as verify_e:
+                    logger.info(f"MLflow experiment set to: {experiment} (tracking_uri: {tracking_uri}) (verification failed: {verify_e})")
+                
+                # Set initial MLflow trace tags
+                tags = self._collect_trace_tags(task, **kwargs)
+                mlflow.update_current_trace(tags=tags)
+        except Exception as e:
+            # If MLflow is not available or not in a trace context, silently continue
+            from minisweagent.utils.log import logger
+            logger.debug(f"MLflow experiment setup failed (non-critical): {e}")
+            pass
         
         try:
             # Use DSPy agent to solve the task
