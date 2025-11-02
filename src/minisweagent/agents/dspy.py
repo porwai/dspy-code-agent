@@ -316,14 +316,13 @@ class DSPyAgent:
                 except Exception as verify_e:
                     logger.info(f"MLflow experiment set to: {experiment} (tracking_uri: {tracking_uri}) (verification failed: {verify_e})")
                 
-                # Set initial MLflow trace tags
+                # Prepare tags (will be applied after trace is created)
                 tags = self._collect_trace_tags(task, **kwargs)
-                mlflow.update_current_trace(tags=tags)
         except Exception as e:
             # If MLflow is not available or not in a trace context, silently continue
             from minisweagent.utils.log import logger
             logger.debug(f"MLflow experiment setup failed (non-critical): {e}")
-            pass
+            tags = None
         
         try:
             # Use DSPy agent to solve the task
@@ -334,6 +333,78 @@ class DSPyAgent:
                 self.dspy_trajectory = self._serialize_trajectory(trajectory)
             # Capture full DSPy result (JSON-safe) using simple serializer
             self.dspy_result = self._serialize_response(result)
+            
+            # Update MLflow trace tags AFTER the trace is created (by DSPy autolog)
+            if tags and (self.config.mlflow_enable or str(os.getenv("MLFLOW_DSPY_ENABLE", "")).lower() in {"1", "true", "yes"}):
+                from minisweagent.utils.log import logger
+                tracking_uri = self.config.mlflow_tracking_uri or os.getenv("MLFLOW_TRACKING_URI") or "http://127.0.0.1:5000"
+                experiment = (self.config.mlflow_experiment or os.getenv("MLFLOW_EXPERIMENT") or "DSPy")
+                
+                trace_id = None
+                try:
+                    # Method 1: Try to get last active trace ID (if available)
+                    if hasattr(mlflow, "get_last_active_trace_id"):
+                        trace_id = mlflow.get_last_active_trace_id()
+                        if trace_id:
+                            logger.info(f"Got trace ID from get_last_active_trace_id(): {trace_id}")
+                except Exception as e:
+                    logger.debug(f"get_last_active_trace_id() failed: {e}")
+                
+                # Method 2: Try to update current trace (if still in trace context and we don't have trace_id)
+                tags_set_via_update = False
+                if not trace_id:
+                    try:
+                        mlflow.update_current_trace(tags=tags)
+                        logger.info(f"Successfully updated current trace with {len(tags)} tags via update_current_trace()")
+                        tags_set_via_update = True
+                    except Exception as e1:
+                        logger.debug(f"update_current_trace() failed: {e1}, will try to find trace by search...")
+                
+                # Method 3: If update_current_trace failed, or if we already have trace_id, set tags via client API
+                if not tags_set_via_update:
+                    try:
+                        from mlflow.tracking import MlflowClient
+                        client = MlflowClient(tracking_uri=tracking_uri)
+                        
+                        # If we don't have trace_id yet, search for it
+                        if not trace_id:
+                            exp = client.get_experiment_by_name(experiment)
+                            if exp:
+                                # Add small delay to ensure trace is committed
+                                import time
+                                time.sleep(0.5)  # Brief delay to ensure trace is persisted
+                                
+                                traces = mlflow.search_traces(
+                                    experiment_ids=[exp.experiment_id],
+                                    order_by=["timestamp_ms DESC"],
+                                    max_results=1,
+                                    return_type="list",
+                                )
+                                if traces:
+                                    trace_id = traces[0].info.trace_id
+                                    logger.info(f"Found trace via search: {trace_id}")
+                        
+                        # Set tags using client API if we have trace_id
+                        if trace_id:
+                            tags_set = 0
+                            for key, value in tags.items():
+                                if value:  # Only set non-empty values
+                                    try:
+                                        # MLflow client API for setting trace tags
+                                        client.set_trace_tag(trace_id, key, str(value))
+                                        tags_set += 1
+                                    except Exception as tag_error:
+                                        logger.debug(f"Failed to set tag '{key}': {tag_error}")
+                            
+                            if tags_set > 0:
+                                logger.info(f"Set {tags_set}/{len(tags)} tags on trace {trace_id} via client API")
+                            else:
+                                logger.warning(f"No tags were set on trace {trace_id}")
+                        else:
+                            logger.warning(f"No traces found in experiment {experiment} to update tags")
+                    except Exception as e2:
+                        logger.warning(f"Failed to update trace tags via client: {e2}")
+                
             
             # Extract the solution from DSPySoftwareEngineeringAgent signature
             solution_text = (
