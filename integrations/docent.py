@@ -396,116 +396,155 @@ def _convert_mlflow_trace_to_docent(trace_obj: Any, metadata: dict | None = None
         elif isinstance(container, str) and container.strip():
             messages.append(parse_chat_message({"role": role, "content": container}))
 
-    # Track and dedupe system messages (only include the first one)
-    system_message_added = False
-
-    # Recursively extract messages from spans
-    def extract_from_spans(spans: list, parent_type: str | None = None):
-        """Recursively extract messages from trace spans."""
+    # Find and process only "ReAct.forward" spans
+    def find_react_forward_span(spans: list) -> Any | None:
+        """Recursively find the first span with name 'ReAct.forward'."""
         for span in spans:
             span_name = span.name if hasattr(span, "name") else "unknown"
-            span_attributes = span.attributes if hasattr(span, "attributes") else {}
-            raw_inputs = span.inputs if hasattr(span, "inputs") else None
-            raw_outputs = span.outputs if hasattr(span, "outputs") else None
-            # MLflow sometimes stores IO in attributes under these keys
-            span_inputs = _norm_io(raw_inputs, span_attributes, "mlflow.spanInputs")
-            span_outputs = _norm_io(raw_outputs, span_attributes, "mlflow.spanOutputs")
-
-            # Helper: emit chat-style messages from a messages list
-            def emit_messages(obj: Any) -> None:
-                try:
-                    if isinstance(obj, list):
-                        for m in obj:
-                            if isinstance(m, dict) and m.get("role") and m.get("content") is not None:
-                                nonlocal system_message_added
-                                role_val = m.get("role")
-                                if role_val == "system":
-                                    if system_message_added:
-                                        continue
-                                    system_message_added = True
-                                messages.append(parse_chat_message({
-                                    "role": role_val,
-                                    "content": m.get("content", ""),
-                                }))
-                except Exception:
-                    pass
-
-            # Helper: try common keys for user/assistant text
-            def maybe_emit_simple(role: str, container: dict) -> None:
-                _maybe_emit_simple(role, container)
-
-            # Map span types to message roles
-            # DSPy spans typically have names like "dspy.ReAct", "dspy.LM", "tool_name", etc.
-            if "ReAct" in span_name or "agent" in span_name.lower():
-                # Skip emitting initial input (task_description) and final output (solution/answer)
-                # Only include embedded chat-style messages, if present
-                if span_inputs and "messages" in span_inputs:
-                    emit_messages(span_inputs.get("messages"))
-
-            elif "lm" in span_name.lower() or "language_model" in span_name.lower():
-                # LLM call - capture prompts/responses if surfaced as chat messages
-                if span_inputs:
-                    if isinstance(span_inputs, dict) and isinstance(span_inputs.get("messages"), list):
-                        emit_messages(span_inputs.get("messages"))
-                    elif isinstance(span_inputs, dict) and span_inputs.get("prompt") is not None:
-                        messages.append(parse_chat_message({
-                            "role": "user",
-                            "content": str(span_inputs.get("prompt")),
-                        }))
-                    else:
-                        maybe_emit_simple("user", span_inputs)
-                if span_outputs:
-                    llm_msg = None
-                    if isinstance(span_outputs, dict):
-                        llm_msg = span_outputs.get("message") or span_outputs.get("response") or span_outputs.get("output")
-                    if llm_msg is not None:
-                        _emit_list_as_messages(llm_msg)
-                    else:
-                        maybe_emit_simple("assistant", span_outputs)
-
-            elif (
-                "tool" in span_name.lower()
-                or any(token in span_name for token in ["Tool", "execute"])
-                or span_name.lower() in {"finish", "finalize", "submit", "finalize_submission", "write_submission"}
-            ):
-                # Tool call span
-                tool_name = (span_attributes.get("tool.name") if isinstance(span_attributes, dict) else None) or span_name.split(".")[-1]
-                tool_inputs = span_inputs if isinstance(span_inputs, dict) else {}
-
-                tool_call_id = f"call_{len([m for m in messages if hasattr(m, 'tool_calls')])}"
-                tool_call = ToolCall(
-                    id=tool_call_id,
-                    function=tool_name,
-                    arguments=tool_inputs if isinstance(tool_inputs, dict) else {},
-                    type="function",
-                    parse_error=None,
-                )
-
-                messages.append(parse_chat_message({
-                    "role": "assistant",
-                    "content": f"Calling tool: {tool_name}",
-                    "tool_calls": [tool_call],
-                }))
-
-                tool_output = None
-                if isinstance(span_outputs, dict):
-                    tool_output = span_outputs.get("output") or span_outputs.get("result") or span_outputs.get("response") or span_outputs.get("content")
-                if tool_output is None:
-                    tool_output = span_outputs
-                if isinstance(tool_output, (dict, list)):
-                    tool_output_str = json.dumps(tool_output, default=str)
-                else:
-                    tool_output_str = str(tool_output) if tool_output is not None else ""
-                messages.append(parse_chat_message({
-                    "role": "tool",
-                    "name": tool_name,
-                    "tool_call_id": tool_call_id,
-                    "content": tool_output_str,
-                }))
-
+            if span_name == "ReAct.forward":
+                return span
             # Recurse into child spans
             if hasattr(span, "child_spans") and span.child_spans:
-                extract_from_spans(span.child_spans, span_name)
+                result = find_react_forward_span(span.child_spans)
+                if result:
+                    return result
+        return None
+
+    def process_react_forward_span(span: Any) -> None:
+        """Process a ReAct.forward span: extract task_description and trajectory."""
+        span_attributes = span.attributes if hasattr(span, "attributes") else {}
+        raw_inputs = span.inputs if hasattr(span, "inputs") else None
+        raw_outputs = span.outputs if hasattr(span, "outputs") else None
+        
+        # Normalize inputs/outputs (check attributes if empty)
+        span_inputs = _norm_io(raw_inputs, span_attributes, "mlflow.spanInputs")
+        span_outputs = _norm_io(raw_outputs, span_attributes, "mlflow.spanOutputs")
+        
+        # Extract task_description from span_inputs
+        if span_inputs and isinstance(span_inputs, dict) and "task_description" in span_inputs:
+            task_desc = span_inputs.get("task_description")
+            if task_desc:
+                messages.append(parse_chat_message({
+                    "role": "user",
+                    "content": str(task_desc),
+                }))
+        
+        # Extract trajectory from span_outputs
+        if span_outputs and isinstance(span_outputs, dict) and "trajectory" in span_outputs:
+            trajectory = span_outputs.get("trajectory")
+            if isinstance(trajectory, dict):
+                # Parse trajectory: thought_N, tool_name_N, tool_args_N, observation_N
+                # Find all step numbers from any of the keys (thought, tool_name, observation)
+                step_numbers = set()
+                for key in trajectory.keys():
+                    if key.startswith("thought_") or key.startswith("tool_name_") or key.startswith("observation_") or key.startswith("tool_args_"):
+                        try:
+                            # Extract number from key like "thought_0" -> 0, "tool_name_1" -> 1
+                            # Split by underscore and take the last part as the step number
+                            parts = key.rsplit("_", 1)  # Split from right, max 1 split
+                            if len(parts) == 2:
+                                step_num = int(parts[1])
+                                step_numbers.add(step_num)
+                        except (ValueError, IndexError):
+                            pass
+                
+                # Process each step in order
+                for step_num in sorted(step_numbers):
+                    # Extract thought
+                    thought_key = f"thought_{step_num}"
+                    thought = trajectory.get(thought_key, "")
+                    
+                    # Extract tool info
+                    tool_name_key = f"tool_name_{step_num}"
+                    tool_args_key = f"tool_args_{step_num}"
+                    observation_key = f"observation_{step_num}"
+                    
+                    tool_name = trajectory.get(tool_name_key)
+                    tool_args = trajectory.get(tool_args_key)
+                    if tool_args is None:
+                        tool_args = {}
+                    observation = trajectory.get(observation_key, "")
+                    
+                    # Skip if this step has nothing
+                    if not thought and not tool_name and not observation:
+                        continue
+                    
+                    # Ensure tool_args is a dict
+                    if not isinstance(tool_args, dict):
+                        tool_args = {}
+                    
+                    # Create assistant message with thought
+                    if thought:
+                        # If there's a tool call, include it
+                        if tool_name:
+                            tool_call_id = f"call_{step_num}"
+                            tool_call = ToolCall(
+                                id=tool_call_id,
+                                function=tool_name,
+                                arguments=tool_args,
+                                type="function",
+                                parse_error=None,
+                            )
+                            messages.append(parse_chat_message({
+                                "role": "assistant",
+                                "content": thought,
+                                "tool_calls": [tool_call],
+                            }))
+                            
+                            # Add tool response message
+                            if observation:
+                                messages.append(parse_chat_message({
+                                    "role": "tool",
+                                    "name": tool_name,
+                                    "tool_call_id": tool_call_id,
+                                    "content": str(observation),
+                                }))
+                        else:
+                            # Just a thought without tool call
+                            messages.append(parse_chat_message({
+                                "role": "assistant",
+                                "content": thought,
+                            }))
+                    elif tool_name:
+                        # Tool call without explicit thought
+                        tool_call_id = f"call_{step_num}"
+                        tool_call = ToolCall(
+                            id=tool_call_id,
+                            function=tool_name,
+                            arguments=tool_args,
+                            type="function",
+                            parse_error=None,
+                        )
+                        messages.append(parse_chat_message({
+                            "role": "assistant",
+                            "content": f"Calling tool: {tool_name}",
+                            "tool_calls": [tool_call],
+                        }))
+                        
+                        if observation:
+                            messages.append(parse_chat_message({
+                                "role": "tool",
+                                "name": tool_name,
+                                "tool_call_id": tool_call_id,
+                                "content": str(observation),
+                            }))
+                
+                # Extract final reasoning and solution if present
+                if "reasoning" in trajectory:
+                    reasoning = trajectory.get("reasoning")
+                    if reasoning:
+                        messages.append(parse_chat_message({
+                            "role": "assistant",
+                            "content": f"Reasoning: {reasoning}",
+                        }))
+                
+                if "solution" in trajectory:
+                    solution = trajectory.get("solution")
+                    if solution:
+                        messages.append(parse_chat_message({
+                            "role": "assistant",
+                            "content": f"Solution: {solution}",
+                        }))
     
     # Extract final prediction/result from trace spans
     all_spans = trace_obj.data.spans if hasattr(trace_obj, "data") and hasattr(trace_obj.data, "spans") else []
@@ -526,6 +565,15 @@ def _convert_mlflow_trace_to_docent(trace_obj: Any, metadata: dict | None = None
         if span_outputs:
             # Look for solution/answer/completion in outputs
             if isinstance(span_outputs, dict):
+                # First check trajectory for solution
+                if "trajectory" in span_outputs and isinstance(span_outputs.get("trajectory"), dict):
+                    trajectory = span_outputs.get("trajectory")
+                    if "solution" in trajectory:
+                        solution = trajectory.get("solution")
+                        if solution:
+                            return str(solution)
+                
+                # Fall back to other keys
                 result = (
                     span_outputs.get("solution")
                     or span_outputs.get("answer")
@@ -549,13 +597,14 @@ def _convert_mlflow_trace_to_docent(trace_obj: Any, metadata: dict | None = None
         return None
     
     if all_spans:
-        extract_from_spans(all_spans)
-        # Try to extract from root spans (check all root-level spans)
-        for root_span in all_spans:
-            result = extract_final_result(root_span)
+        # Find and process only "ReAct.forward" span
+        react_forward_span = find_react_forward_span(all_spans)
+        if react_forward_span:
+            process_react_forward_span(react_forward_span)
+            # Extract final prediction from the ReAct.forward span
+            result = extract_final_result(react_forward_span)
             if result:
                 final_prediction = result
-                break
     
     # If no messages extracted, create a basic message from trace
     if not messages:
