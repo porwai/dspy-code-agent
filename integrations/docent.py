@@ -396,6 +396,26 @@ def _convert_mlflow_trace_to_docent(trace_obj: Any, metadata: dict | None = None
         elif isinstance(container, str) and container.strip():
             messages.append(parse_chat_message({"role": role, "content": container}))
 
+    # Find and extract system prompt from "ChatAdapter.format_1" span
+    def find_and_extract_system_prompt(spans: list) -> str | None:
+        """Recursively find the first span with name 'ChatAdapter.format_1' and extract system prompt."""
+        for span in spans:
+            span_name = span.name if hasattr(span, "name") else "unknown"
+            if span_name == "ChatAdapter.format_1":
+                span_attributes = span.attributes if hasattr(span, "attributes") else {}
+                raw_inputs = span.inputs if hasattr(span, "inputs") else None
+                span_inputs = _norm_io(raw_inputs, span_attributes, "mlflow.spanInputs")
+                if span_inputs and isinstance(span_inputs, dict) and "signature" in span_inputs:
+                    signature = span_inputs.get("signature")
+                    if signature:
+                        return str(signature)
+            # Recurse into child spans
+            if hasattr(span, "child_spans") and span.child_spans:
+                result = find_and_extract_system_prompt(span.child_spans)
+                if result:
+                    return result
+        return None
+
     # Find and process only "ReAct.forward" spans
     def find_react_forward_span(spans: list) -> Any | None:
         """Recursively find the first span with name 'ReAct.forward'."""
@@ -597,6 +617,14 @@ def _convert_mlflow_trace_to_docent(trace_obj: Any, metadata: dict | None = None
         return None
     
     if all_spans:
+        # Extract system prompt from "ChatAdapter.format_1" span
+        system_prompt = find_and_extract_system_prompt(all_spans)
+        if system_prompt:
+            messages.insert(0, parse_chat_message({
+                "role": "system",
+                "content": system_prompt,
+            }))
+        
         # Find and process only "ReAct.forward" span
         react_forward_span = find_react_forward_span(all_spans)
         if react_forward_span:

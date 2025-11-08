@@ -416,6 +416,10 @@ class DSPyAgent:
                 or (result.get("completion") if isinstance(result, dict) else None)
                 or str(result)
             )
+            
+            # Ensure solution_text always ends with a newline
+            if solution_text and not solution_text.endswith("\n"):
+                solution_text = solution_text + "\n"
                         
             raise Submitted(solution_text)
             

@@ -25,6 +25,9 @@ mydb.sqlite
 mlruns
 openrouter__qwen__qwen3-coder-30b-a3b-instruct.mlflow.json
 
+mlruns.db
+json_traces_test/
+
 # Distribution / packaging
 .Python
 build/
