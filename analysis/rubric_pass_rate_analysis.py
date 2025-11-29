@@ -5,11 +5,12 @@ Compute pass rates for agent runs based on Docent rubric labels.
 Given:
 - A collection_id
 - A rubric_id
+- A name (for file naming)
 
 Outputs:
 - # total runs
 - # runs labeled match / non-match
-- pass rate for each group
+- resolved rate for each group
 """
 
 import json
@@ -30,77 +31,45 @@ if load_dotenv and env_path.exists():
 
 from docent import Docent
 
-app = typer.Typer(help="Compute pass rates for agent runs based on Docent rubric labels")
-
 
 # ---------------------------------------------------------
 # Dump raw data for analysis
 # ---------------------------------------------------------
 
-def dump_raw_data(client: Docent, collection_id: str, rubric_id: str) -> None:
-    """Dump raw API responses to JSON files in the same directory as this script."""
+def dump_raw_data(client: Docent, collection_id: str, rubric_id: str, name: str) -> Path:
+    """Dump raw API responses to JSON files in analysis/rubrics/ folder.
+    
+    Returns:
+        Path to the rubric_run_state.json file
+    """
     script_dir = Path(__file__).parent
+    rubrics_dir = script_dir / "rubrics"
+    rubrics_dir.mkdir(exist_ok=True)
     
-    # Try to get rubric run state - check what methods are available
-    print("Checking available client methods...")
-    client_methods = [m for m in dir(client) if not m.startswith("_")]
-    print(f"Available methods: {', '.join(sorted(client_methods))}")
-    print()
+    # Sanitize name for filename (replace spaces and dashes with underscores, remove special chars)
+    safe_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in name).strip()
+    safe_name = safe_name.replace(" ", "_").replace("-", "_").replace("__", "_").strip("_")
     
-    # Try to fetch rubric run state
+    # Fetch rubric run state
     print("Fetching rubric run state...")
     try:
-        # Try different possible method names
         if hasattr(client, "get_rubric_run_state"):
             rubric_state = client.get_rubric_run_state(collection_id, rubric_id)
         elif hasattr(client, "get_rubric_state"):
             rubric_state = client.get_rubric_state(collection_id, rubric_id)
         else:
-            print("Warning: Could not find rubric state method. Trying to inspect collection...")
-            rubric_state = None
+            raise ValueError("Could not find method to get rubric state")
     except Exception as e:
-        print(f"Error fetching rubric state: {e}")
-        rubric_state = None
+        raise ValueError(f"Error fetching rubric state: {e}")
     
-    if rubric_state is not None:
-        rubric_file = script_dir / "rubric_run_state.json"
-        with open(rubric_file, "w") as f:
-            json.dump(rubric_state, f, indent=2, default=str)
-        print(f"Saved rubric run state to: {rubric_file}")
-        results_count = len(rubric_state.get("results", [])) if isinstance(rubric_state, dict) else 0
-        print(f"Found {results_count} rubric results")
-    else:
-        print("Could not fetch rubric state - check available methods above")
+    rubric_file = rubrics_dir / f"{safe_name}_rubric_run_state.json"
+    with open(rubric_file, "w") as f:
+        json.dump(rubric_state, f, indent=2, default=str)
+    print(f"Saved rubric run state to: {rubric_file}")
+    results_count = len(rubric_state.get("results", [])) if isinstance(rubric_state, dict) else 0
+    print(f"Found {results_count} rubric results")
     
-    # Try to get agent runs
-    print("\nFetching agent runs...")
-    try:
-        # Try different possible method names
-        if hasattr(client, "get_agent_runs"):
-            runs = client.get_agent_runs(collection_id)
-        elif hasattr(client, "list_agent_runs"):
-            runs = client.list_agent_runs(collection_id)
-        elif hasattr(client, "get_collection"):
-            collection = client.get_collection(collection_id)
-            runs = collection.get("agent_runs", []) if isinstance(collection, dict) else []
-        else:
-            print("Warning: Could not find agent runs method.")
-            runs = None
-    except Exception as e:
-        print(f"Error fetching agent runs: {e}")
-        runs = None
-    
-    if runs is not None:
-        runs_file = script_dir / "agent_runs.json"
-        with open(runs_file, "w") as f:
-            json.dump(runs, f, indent=2, default=str)
-        print(f"Saved agent runs to: {runs_file}")
-        runs_count = len(runs) if isinstance(runs, list) else 0
-        print(f"Found {runs_count} agent runs")
-    else:
-        print("Could not fetch agent runs - check available methods above")
-    
-    print(f"\nFiles saved in: {script_dir}")
+    return rubric_file
 
 
 # ---------------------------------------------------------
@@ -223,43 +192,8 @@ def compute_passrate(run_ids: list[str], run_scores: dict[str, bool | None]) -> 
     return (resolved / total if total > 0 else 0.0, resolved, total)
 
 
-@app.command()
-def dump(
-    collection_id: str = typer.Option(
-        os.getenv("DOCENT_COLLECTION_ID", ""),
-        "--collection-id",
-        "-c",
-        help="Docent collection ID (or set DOCENT_COLLECTION_ID env var)",
-    ),
-    rubric_id: str = typer.Option(
-        os.getenv("DOCENT_RUBRIC_ID", ""),
-        "--rubric-id",
-        "-r",
-        help="Docent rubric ID (or set DOCENT_RUBRIC_ID env var)",
-    ),
-    api_key: str = typer.Option(
-        os.getenv("DOCENT_API_KEY", ""),
-        "--api-key",
-        "-k",
-        help="Docent API key (or set DOCENT_API_KEY env var, can be omitted if in .env)",
-    ),
-) -> None:
-    """Dump raw API responses to JSON files for analysis."""
-    if not api_key:
-        api_key = os.getenv("DOCENT_API_KEY", "")
-    if not api_key:
-        raise typer.BadParameter("DOCENT_API_KEY must be provided via env var or --api-key")
-    if not collection_id:
-        raise typer.BadParameter("Collection ID must be provided via env var DOCENT_COLLECTION_ID or --collection-id")
-    if not rubric_id:
-        raise typer.BadParameter("Rubric ID must be provided via env var DOCENT_RUBRIC_ID or --rubric-id")
-
-    client = Docent(api_key=api_key)
-    dump_raw_data(client, collection_id, rubric_id)
-
-
-@app.command()
 def main(
+    name: str = typer.Argument(..., help="Name for the rubric files (e.g., 'instruction calling', 'gpt-5 swe-bench')"),
     collection_id: str = typer.Option(
         os.getenv("DOCENT_COLLECTION_ID", ""),
         "--collection-id",
@@ -277,12 +211,6 @@ def main(
         "--api-key",
         "-k",
         help="Docent API key (or set DOCENT_API_KEY env var, can be omitted if in .env)",
-    ),
-    dump_data: bool = typer.Option(
-        False,
-        "--dump",
-        "-d",
-        help="Dump raw API responses to JSON files before analysis",
     ),
 ) -> None:
     """Compute pass rates for agent runs based on Docent rubric labels."""
@@ -296,29 +224,27 @@ def main(
         raise typer.BadParameter("Rubric ID must be provided via env var DOCENT_RUBRIC_ID or --rubric-id")
 
     script_dir = Path(__file__).parent
+    rubrics_dir = script_dir / "rubrics"
+    rubrics_dir.mkdir(exist_ok=True)
+    
+    # Sanitize name for filename (replace spaces and dashes with underscores, remove special chars)
+    safe_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in name).strip()
+    safe_name = safe_name.replace(" ", "_").replace("-", "_").replace("__", "_").strip("_")
+    
+    rubric_file = rubrics_dir / f"{safe_name}_rubric_run_state.json"
     client = Docent(api_key=api_key)
 
-    if dump_data:
-        dump_raw_data(client, collection_id, rubric_id)
-        print("\n" + "=" * 60 + "\n")
-
-    # Load rubric state (from file if available, otherwise fetch)
-    rubric_file = script_dir / "rubric_run_state.json"
+    # Load rubric state (from file if available, otherwise fetch and dump)
     if rubric_file.exists():
         print(f"Loading rubric data from file: {rubric_file}")
         with open(rubric_file, "r") as f:
             rubric_state = json.load(f)
     else:
         print("Fetching rubric data from API...")
-        try:
-            if hasattr(client, "get_rubric_run_state"):
-                rubric_state = client.get_rubric_run_state(collection_id, rubric_id)
-            elif hasattr(client, "get_rubric_state"):
-                rubric_state = client.get_rubric_state(collection_id, rubric_id)
-            else:
-                raise typer.BadParameter("Could not find method to get rubric state")
-        except Exception as e:
-            raise typer.BadParameter(f"Error fetching rubric state: {e}")
+        rubric_file = dump_raw_data(client, collection_id, rubric_id, name)
+        with open(rubric_file, "r") as f:
+            rubric_state = json.load(f)
+        print()
     
     # Extract labels from rubric state
     print("Extracting rubric labels...")
@@ -355,21 +281,33 @@ def main(
     match_with_status = sum(1 for run_id in match_runs if run_scores.get(run_id) is not None)
     nonmatch_with_status = sum(1 for run_id in nonmatch_runs if run_scores.get(run_id) is not None)
     
+    # Build summary report
+    summary_lines = [
+        "",
+        "=" * 60,
+        " Rubric Evaluation Summary",
+        "=" * 60,
+        f"Total runs evaluated: {len(rubric_labels)}",
+        f"Runs labeled MATCH:     {len(match_runs)}",
+        f"Runs labeled NON-MATCH: {len(nonmatch_runs)}",
+        "-" * 60,
+        f"MATCH runs with status: {match_with_status}/{len(match_runs)}",
+        f"NON-MATCH runs with status: {nonmatch_with_status}/{len(nonmatch_runs)}",
+        "-" * 60,
+        f"Resolved rate | MATCH:     {match_rate:.3f} ({match_resolved}/{match_total} resolved)",
+        f"Resolved rate | NON-MATCH: {nonmatch_rate:.3f} ({nonmatch_resolved}/{nonmatch_total} resolved)",
+        "=" * 60,
+    ]
+    summary_text = "\n".join(summary_lines)
+    
     # Print report
-    print("\n" + "=" * 60)
-    print(" Rubric Evaluation Summary")
-    print("=" * 60)
-    print(f"Total runs evaluated: {len(rubric_labels)}")
-    print(f"Runs labeled MATCH:     {len(match_runs)}")
-    print(f"Runs labeled NON-MATCH: {len(nonmatch_runs)}")
-    print("-" * 60)
-    print(f"MATCH runs with status: {match_with_status}/{len(match_runs)}")
-    print(f"NON-MATCH runs with status: {nonmatch_with_status}/{len(nonmatch_runs)}")
-    print("-" * 60)
-    print(f"Resolved rate | MATCH:     {match_rate:.3f} ({match_resolved}/{match_total} resolved)")
-    print(f"Resolved rate | NON-MATCH: {nonmatch_rate:.3f} ({nonmatch_resolved}/{nonmatch_total} resolved)")
-    print("=" * 60)
+    print(summary_text)
+    
+    # Save summary to file
+    summary_file = rubrics_dir / f"{safe_name}_summary.txt"
+    summary_file.write_text(summary_text)
+    print(f"\nSummary saved to: {summary_file}")
 
 
 if __name__ == "__main__":
-    app()
+    typer.run(main)

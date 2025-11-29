@@ -1,0 +1,14 @@
+
+============================================================
+ Rubric Evaluation Summary Strange Behaviors
+============================================================
+Total runs evaluated: 100
+Runs labeled MATCH:     76
+Runs labeled NON-MATCH: 24
+------------------------------------------------------------
+MATCH runs with status: 17/76
+NON-MATCH runs with status: 13/24
+------------------------------------------------------------
+Resolved rate | MATCH:     0.224 (17/76 resolved)
+Resolved rate | NON-MATCH: 0.542 (13/24 resolved)
+============================================================
