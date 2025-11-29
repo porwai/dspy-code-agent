@@ -43,6 +43,14 @@ def update_preds_json(output_dir: Path, instance_id: str | None, model_name: str
         return
     preds_path = output_dir / "preds.json"
     try:
+        # Ensure result always ends with a newline
+        if result is not None:
+            result = str(result)
+            if not result.endswith("\n"):
+                result = result + "\n"
+        else:
+            result = "\n"
+        
         preds = {}
         if preds_path.exists():
             preds = json.loads(preds_path.read_text())

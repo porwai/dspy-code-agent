@@ -45,7 +45,7 @@ class DSPyAgentConfig:
     mlflow_experiment: str = "DSPy"
 
 # lm = dspy.LM('openai/gpt-4o-mini', api_key=os.environ["OPENAI_API_KEY"])# Configure DSPy to use OpenAI
-lm = dspy.LM('openrouter/qwen/qwen3-coder-30b-a3b-instruct', api_key=os.environ["OPENROUTER_API_KEY"], max_tokens=32000, temperature=0.7) # Configure DSPy to use OpenRouter Qwen
+lm = dspy.LM('openrouter/qwen/qwen3-coder-30b-a3b-instruct', api_key=os.environ["OPENROUTER_API_KEY"], max_tokens=16000, temperature=0.7) # Configure DSPy to use OpenRouter Qwen
 dspy.configure(lm=lm)
 
 class DSPyAgent:
@@ -418,8 +418,12 @@ class DSPyAgent:
             )
             
             # Ensure solution_text always ends with a newline
-            if solution_text and not solution_text.endswith("\n"):
-                solution_text = solution_text + "\n"
+            if solution_text is not None:
+                solution_text = str(solution_text)
+                if not solution_text.endswith("\n"):
+                    solution_text = solution_text + "\n"
+            else:
+                solution_text = "\n"
                         
             raise Submitted(solution_text)
             

@@ -96,6 +96,14 @@ def get_sb_environment(config: dict, instance: dict) -> Environment:
 def update_preds_file(output_path: Path, instance_id: str, model_name: str, result: str):
     """Update the output JSON file with results from a single instance."""
     with _OUTPUT_FILE_LOCK:
+        # Ensure result always ends with a newline
+        if result is not None:
+            result = str(result)
+            if not result.endswith("\n"):
+                result = result + "\n"
+        else:
+            result = "\n"
+        
         output_data = {}
         if output_path.exists():
             output_data = json.loads(output_path.read_text())

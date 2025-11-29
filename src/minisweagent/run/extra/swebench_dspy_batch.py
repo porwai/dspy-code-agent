@@ -7,6 +7,7 @@ import json
 import os
 import random
 import re
+import subprocess
 import threading
 import time
 import traceback
@@ -82,6 +83,14 @@ def get_sb_environment(config: dict, instance: dict) -> object:
 def update_preds_file_dspy(output_path: Path, instance_id: str, model_name: str, result: str):
     """Update the output JSON file with results from a single instance."""
     with _OUTPUT_FILE_LOCK:
+        # Ensure result always ends with a newline
+        if result is not None:
+            result = str(result)
+            if not result.endswith("\n"):
+                result = result + "\n"
+        else:
+            result = "\n"
+        
         output_data = {}
         if output_path.exists():
             output_data = json.loads(output_path.read_text())
@@ -119,6 +128,7 @@ def process_instance(
     (instance_dir / f"{instance_id}.dspy.traj.json").unlink(missing_ok=True)
     
     model = get_model(config=config.get("model", {}))
+    model_name = model.config.model_name if hasattr(model, "config") and hasattr(model.config, "model_name") else "unknown"
     task = instance["problem_statement"]
 
     progress_manager.on_instance_start(instance_id)
@@ -127,6 +137,7 @@ def process_instance(
     agent = None
     extra_info = None
     env = None
+    environment_failed = False
 
     try:
         env = get_sb_environment(config, instance)
@@ -163,16 +174,40 @@ def process_instance(
         try:
             # Ensure we diff within the repo working dir
             diff_out = env.execute("git -C /testbed diff")
-            diff_text = (diff_out.get("output") or "").strip()
-            if diff_out.get("returncode") == 0 and diff_text:
+            diff_text = diff_out.get("output") or ""
+            if diff_out.get("returncode") == 0 and diff_text.strip():
+                # Ensure diff_text ends with newline (don't strip trailing newlines)
+                if not diff_text.endswith("\n"):
+                    diff_text = diff_text + "\n"
                 result = diff_text
         except Exception:
             pass
             
+    except (RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+        # Environment setup failures - agent never ran
+        environment_failed = True
+        error_type = type(e).__name__
+        error_msg = str(e)
+        logger.error(f"Environment setup failed for instance {instance_id}: {error_type}: {error_msg}")
+        exit_status = f"ENV_SETUP_FAILED_{error_type}"
+        result = f"Environment setup failed: {error_msg}"
+        extra_info = {
+            "error_type": "environment_setup_failure",
+            "traceback": traceback.format_exc(),
+            "agent_ran": False,
+        }
     except Exception as e:
-        logger.error(f"Error processing instance {instance_id}: {e}", exc_info=True)
-        exit_status, result = type(e).__name__, str(e)
-        extra_info = {"traceback": traceback.format_exc()}
+        # Agent execution failures - agent was created but failed during execution
+        error_type = type(e).__name__
+        error_msg = str(e)
+        logger.error(f"Agent execution failed for instance {instance_id}: {error_type}: {error_msg}", exc_info=True)
+        exit_status = f"AGENT_FAILED_{error_type}"
+        result = f"Agent execution failed: {error_msg}"
+        extra_info = {
+            "error_type": "agent_execution_failure",
+            "traceback": traceback.format_exc(),
+            "agent_ran": agent is not None,
+        }
     finally:
         # Explicitly cleanup the environment/container to ensure clean state for each run
         if env is not None:
@@ -180,23 +215,54 @@ def process_instance(
                 env.cleanup()
             except Exception as e:
                 logger.warning(f"Failed to cleanup environment for {instance_id}: {e}")
-        save_traj(
-            agent,
-            instance_dir / f"{instance_id}.traj.json",
-            exit_status=exit_status,
-            result=result,
-            extra_info=extra_info,
-            instance_id=instance_id,
-            print_fct=logger.info,
-        )
-        save_traj_dspy(
-            agent,
-            instance_dir / f"{instance_id}.dspy.traj.json",
-            exit_status=exit_status,
-            result=result,
-            extra_info=extra_info,
-        )
-        update_preds_file_dspy(output_dir / "preds.json", instance_id, model.config.model_name, result)
+        
+        # Only save trajectories if agent was created or if we want to track environment failures
+        # For environment failures, we still save to track the failure but mark it clearly
+        if agent is not None or not environment_failed:
+            save_traj(
+                agent,
+                instance_dir / f"{instance_id}.traj.json",
+                exit_status=exit_status,
+                result=result,
+                extra_info=extra_info,
+                instance_id=instance_id,
+                print_fct=logger.info,
+            )
+            save_traj_dspy(
+                agent,
+                instance_dir / f"{instance_id}.dspy.traj.json",
+                exit_status=exit_status,
+                result=result,
+                extra_info=extra_info,
+            )
+        else:
+            # For environment failures, save minimal trajectory to track the failure
+            logger.warning(f"Skipping trajectory save for {instance_id} - environment setup failed, agent never ran")
+            # Still create a minimal trajectory file to track the failure
+            minimal_traj = {
+                "info": {
+                    "exit_status": exit_status,
+                    "submission": result,
+                    "error_type": "environment_setup_failure",
+                    "agent_ran": False,
+                },
+                "messages": [],
+                "dspy_trajectory": [],
+                "dspy_result": {},
+            }
+            if extra_info:
+                minimal_traj["info"].update(extra_info)
+            instance_dir.mkdir(parents=True, exist_ok=True)
+            (instance_dir / f"{instance_id}.traj.json").write_text(json.dumps(minimal_traj, indent=2))
+            (instance_dir / f"{instance_id}.dspy.traj.json").write_text(json.dumps(minimal_traj, indent=2))
+            logger.info(f"Saved minimal trajectory for environment failure: {instance_id}")
+        
+        # Always update predictions file, but mark environment failures clearly
+        if environment_failed:
+            # Don't mark as "processed" in preds.json for environment failures - allow retry
+            logger.info(f"Skipping preds.json update for {instance_id} - environment failure allows retry")
+        else:
+            update_preds_file_dspy(output_dir / "preds.json", instance_id, model_name, result)
         progress_manager.on_instance_end(instance_id, exit_status)
 
 

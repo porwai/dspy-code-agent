@@ -209,7 +209,7 @@ agent:
 
     If you have completed your assignment, please consult the first message about how to
     submit your solution (you will not be able to continue working on this task after that).
-  step_limit: 250
+  step_limit: 40
   cost_limit: 3.
 
 environment:
@@ -222,6 +222,9 @@ environment:
     PIP_PROGRESS_BAR: 'off'
     TQDM_DISABLE: '1'
   environment_class: docker
+  pull_timeout: 120
+  max_retries: 2
+  retry_delay: 5.0
 
 model:
   model_name: "anthropic/claude-sonnet-4-20250514"

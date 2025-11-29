@@ -18,6 +18,9 @@ __pycache__/
 # C extensions
 *.so
 
+# json files
+*.json
+
 # mlflow
 mlartifacts/
 mydb.sqlite

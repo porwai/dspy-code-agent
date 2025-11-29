@@ -2,6 +2,7 @@ import logging
 import os
 import shlex
 import subprocess
+import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -31,6 +32,10 @@ class DockerEnvironmentConfig:
     """Max duration to keep container running. Uses the same format as the sleep command."""
     pull_timeout: int = 120
     """Timeout in seconds for pulling images."""
+    max_retries: int = 2
+    """Maximum number of retry attempts for container startup."""
+    retry_delay: float = 5.0
+    """Initial delay in seconds between retries (exponential backoff)."""
 
 
 class DockerEnvironment:
@@ -47,37 +52,72 @@ class DockerEnvironment:
         return asdict(self.config)
 
     def _start_container(self):
-        """Start the Docker container and return the container ID."""
+        """Start the Docker container and return the container ID with retry logic."""
         container_name = f"minisweagent-{uuid.uuid4().hex[:8]}"
-        # First, try to remove any existing container with the same name (unlikely but possible)
-        subprocess.run(
-            [self.config.executable, "rm", "-f", container_name],
-            capture_output=True,
-            timeout=5,
-        )
-        cmd = [
-            self.config.executable,
-            "run",
-            "-d",
-            "--name",
-            container_name,
-            "-w",
-            self.config.cwd,
-            *self.config.run_args,
-            self.config.image,
-            "sleep",
-            self.config.container_timeout,
-        ]
-        self.logger.debug(f"Starting container with command: {shlex.join(cmd)}")
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=self.config.pull_timeout,  # docker pull might take a while
-            check=True,
-        )
-        self.logger.info(f"Started container {container_name} with ID {result.stdout.strip()}")
-        self.container_id = result.stdout.strip()
+        last_exception = None
+        
+        for attempt in range(self.config.max_retries + 1):
+            try:
+                # First, try to remove any existing container with the same name (unlikely but possible)
+                subprocess.run(
+                    [self.config.executable, "rm", "-f", container_name],
+                    capture_output=True,
+                    timeout=5,
+                )
+                cmd = [
+                    self.config.executable,
+                    "run",
+                    "-d",
+                    "--name",
+                    container_name,
+                    "-w",
+                    self.config.cwd,
+                    *self.config.run_args,
+                    self.config.image,
+                    "sleep",
+                    self.config.container_timeout,
+                ]
+                if attempt == 0:
+                    self.logger.debug(f"Starting container with command: {shlex.join(cmd)}")
+                else:
+                    self.logger.info(f"Retrying container startup (attempt {attempt + 1}/{self.config.max_retries + 1})")
+                
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.config.pull_timeout,  # docker pull might take a while
+                    check=True,
+                )
+                self.logger.info(f"Started container {container_name} with ID {result.stdout.strip()}")
+                self.container_id = result.stdout.strip()
+                return
+            except subprocess.TimeoutExpired as e:
+                last_exception = e
+                if attempt < self.config.max_retries:
+                    delay = self.config.retry_delay * (2 ** attempt)
+                    self.logger.warning(f"Container startup timed out after {self.config.pull_timeout}s (attempt {attempt + 1}/{self.config.max_retries + 1}). Retrying in {delay:.1f}s...")
+                    time.sleep(delay)
+                else:
+                    self.logger.error(f"Container startup failed after {self.config.max_retries + 1} attempts: timeout after {self.config.pull_timeout}s")
+            except subprocess.CalledProcessError as e:
+                last_exception = e
+                stderr = e.stderr or ""
+                stdout = e.stdout or ""
+                if attempt < self.config.max_retries:
+                    delay = self.config.retry_delay * (2 ** attempt)
+                    self.logger.warning(f"Container startup failed with exit code {e.returncode} (attempt {attempt + 1}/{self.config.max_retries + 1}). Retrying in {delay:.1f}s...")
+                    if stderr:
+                        self.logger.debug(f"Docker error output: {stderr[:200]}")
+                    time.sleep(delay)
+                else:
+                    self.logger.error(f"Container startup failed after {self.config.max_retries + 1} attempts: exit code {e.returncode}")
+                    if stderr:
+                        self.logger.error(f"Docker stderr: {stderr[:500]}")
+                    if stdout:
+                        self.logger.error(f"Docker stdout: {stdout[:500]}")
+        
+        raise RuntimeError(f"Failed to start Docker container '{self.config.image}' after {self.config.max_retries + 1} attempts") from last_exception
 
     def execute(self, command: str, cwd: str = "", *, timeout: int | None = None) -> dict[str, Any]:
         """Execute a command in the Docker container and return the result as a dict."""

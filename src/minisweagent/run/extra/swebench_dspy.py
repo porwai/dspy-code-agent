@@ -170,8 +170,11 @@ def main(
         try:
             # Ensure we diff within the repo working dir
             diff_out = env.execute("git -C /testbed diff")
-            diff_text = (diff_out.get("output") or "").strip()
-            if diff_out.get("returncode") == 0 and diff_text:
+            diff_text = diff_out.get("output") or ""
+            if diff_out.get("returncode") == 0 and diff_text.strip():
+                # Ensure diff_text ends with newline (don't strip trailing newlines)
+                if not diff_text.endswith("\n"):
+                    diff_text = diff_text + "\n"
                 result = diff_text
         except Exception:
             pass
