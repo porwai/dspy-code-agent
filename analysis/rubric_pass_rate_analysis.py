@@ -285,7 +285,7 @@ def main(
     summary_lines = [
         "",
         "=" * 60,
-        " Rubric Evaluation Summary",
+        f" Rubric Evaluation Summary: {name}",
         "=" * 60,
         f"Total runs evaluated: {len(rubric_labels)}",
         f"Runs labeled MATCH:     {len(match_runs)}",

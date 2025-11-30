@@ -1,14 +1,14 @@
 
 ============================================================
-Rubric Evaluation Summary Strange Behaviors
+ Rubric Evaluation Summary: self-correction qwen-3.0 swe bench lite
 ============================================================
 Total runs evaluated: 100
-Runs labeled MATCH:     76
-Runs labeled NON-MATCH: 24
+Runs labeled MATCH:     90
+Runs labeled NON-MATCH: 10
 ------------------------------------------------------------
-MATCH runs with status: 17/76
-NON-MATCH runs with status: 13/24
+MATCH runs with status: 90/90
+NON-MATCH runs with status: 6/10
 ------------------------------------------------------------
-Resolved rate | MATCH:     0.224 (17/76 resolved)
-Resolved rate | NON-MATCH: 0.542 (13/24 resolved)
+Resolved rate | MATCH:     0.322 (29/90 resolved)
+Resolved rate | NON-MATCH: 0.100 (1/10 resolved)
 ============================================================
