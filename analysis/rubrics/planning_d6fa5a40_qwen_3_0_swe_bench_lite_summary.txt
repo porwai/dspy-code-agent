@@ -1,14 +1,14 @@
 
 ============================================================
- Rubric Evaluation Summary: self-correction qwen-3.0 swe bench lite
+ Rubric Evaluation Summary: planning d6fa5a40 qwen-3.0 swe bench lite
 ============================================================
 Total runs evaluated: 100
-Runs labeled MATCH:     61
-Runs labeled NON-MATCH: 39
+Runs labeled MATCH:     56
+Runs labeled NON-MATCH: 44
 ------------------------------------------------------------
-MATCH runs with status: 61/61
-NON-MATCH runs with status: 35/39
+MATCH runs with status: 52/56
+NON-MATCH runs with status: 44/44
 ------------------------------------------------------------
-Resolved rate | MATCH:     0.344 (21/61 resolved)
-Resolved rate | NON-MATCH: 0.231 (9/39 resolved)
+Resolved rate | MATCH:     0.107 (6/56 resolved)
+Resolved rate | NON-MATCH: 0.545 (24/44 resolved)
 ============================================================

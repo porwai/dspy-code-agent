@@ -1,14 +1,14 @@
 
 ============================================================
- Rubric Evaluation Summary: self-correction qwen-3.0 swe bench lite
+ Rubric Evaluation Summary: memory drift qwen-3.0 swe bench lite
 ============================================================
 Total runs evaluated: 100
-Runs labeled MATCH:     61
-Runs labeled NON-MATCH: 39
+Runs labeled MATCH:     34
+Runs labeled NON-MATCH: 66
 ------------------------------------------------------------
-MATCH runs with status: 61/61
-NON-MATCH runs with status: 35/39
+MATCH runs with status: 34/34
+NON-MATCH runs with status: 62/66
 ------------------------------------------------------------
-Resolved rate | MATCH:     0.344 (21/61 resolved)
-Resolved rate | NON-MATCH: 0.231 (9/39 resolved)
+Resolved rate | MATCH:     0.088 (3/34 resolved)
+Resolved rate | NON-MATCH: 0.409 (27/66 resolved)
 ============================================================
